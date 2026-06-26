@@ -44,9 +44,20 @@ code {
 .ok { color: #2b8a3e; font-size: 0.9rem; }
 .err { color: #c92a2a; font-size: 0.9rem; }
 
+/* Player video */
+.player {
+  width: 100%;
+  max-height: 360px;
+  border-radius: 8px;
+  background: #000;
+  margin: 0.5rem 0;
+}
+
 /* Parole con timecode (mark `timing`) */
-.editor .w { border-bottom: 1px dotted #ccc; cursor: help; }
+.editor .w { border-bottom: 1px dotted #ccc; cursor: pointer; }
 .editor .w:hover { background: #fff3bf; }
+/* Parola in riproduzione */
+.editor .playing { background: #ffd43b; border-radius: 2px; }
 
 /* Cursori dei collaboratori */
 .collaboration-cursor__caret {
