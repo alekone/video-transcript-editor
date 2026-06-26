@@ -15,6 +15,24 @@ h1 { font-size: 1.4rem; }
 }
 .ProseMirror:focus { outline: none; }
 
+/* Trascrizione */
+.transcriber { margin: 1rem 0; }
+.upload {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.9rem;
+  border: 1px dashed #aaa;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+.upload input { font-size: 0.8rem; }
+.err { color: #c92a2a; font-size: 0.9rem; }
+.words { margin-top: 0.75rem; }
+.words .w { border-bottom: 1px dotted #ccc; cursor: help; }
+.words .w:hover { background: #fff3bf; }
+
 /* Cursori dei collaboratori */
 .collaboration-cursor__caret {
   border-left: 1px solid #0d0d0d;
