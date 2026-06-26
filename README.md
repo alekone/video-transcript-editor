@@ -9,7 +9,7 @@ Workflow tipo Descript: il testo trascritto è ancorato ai timecode; tagliando/s
 | Pezzo | Tecnologia |
 |---|---|
 | Editing collaborativo realtime | Yjs (CRDT) + TipTap (ProseMirror) |
-| Backend realtime + (futuro) trascrizione | PartyKit (servizio gestito) |
+| Backend realtime | Hocuspocus (server Yjs) — deployato su Render da GitHub |
 | Frontend | Vite + React + TypeScript |
 | Trascrizione | **Locale** — ffmpeg + whisper.cpp (Metal sul Mac). Nessun upload: gestisce video da 10+ GB. Timecode a livello di parola |
 | Ancoraggio timecode | Mark TipTap `timing` su ogni parola → sopravvive all'editing → base dell'EDL |
@@ -33,9 +33,9 @@ testo ancorato al suo timecode, editabile in collaborazione.
 
 ```bash
 npm install
-npm run dev        # PartyKit (:1999) + Vite client (:5173) insieme
+npm run dev        # server realtime (:1234) + Vite client (:5173) insieme
 # oppure separati:
-npm run dev:party
+npm run dev:server
 npm run dev:client
 ```
 
@@ -43,26 +43,27 @@ Apri `http://localhost:5173/v-editor/` in due tab per vedere la collaborazione i
 
 ## Deploy
 
+Il **backend realtime** si deploya da GitHub su **Render** (Blueprint `render.yaml`):
+collega il repo su render.com → Blueprint → Apply. Ogni push rideploya il server e
+fornisce un URL `wss://<nome>.onrender.com` (TLS automatico).
+
 Il **client** è statico e viene pubblicato nella sottocartella `mininno.com/v-editor`
-(repo `mininno.com`, script `deploy:veditor`). Il **backend** gira su PartyKit cloud.
+(repo `mininno.com`, script `deploy:veditor`).
 
 ```bash
-# 1. backend realtime (richiede login PartyKit/Cloudflare)
-npm run deploy:party                       # → v-editor.<username>.partykit.dev
-
-# 2. configura l'host per la build di produzione
+# 1. configura l'URL del server Render per la build di produzione
 cp client/.env.production.example client/.env.production
-#    e imposta VITE_PARTYKIT_HOST=v-editor.<username>.partykit.dev
+#    e imposta VITE_REALTIME_URL=wss://<nome>.onrender.com
 
-# 3. pubblica il client sul sito
+# 2. pubblica il client sul sito
 cd ../mininno.com && bun run deploy:veditor
 ```
 
 ## Stato
 
-- [x] Editing collaborativo realtime (Yjs + TipTap + PartyKit), verificato in locale
+- [x] Editing collaborativo realtime (Yjs + TipTap + Hocuspocus), verificato in locale
 - [x] Setup deploy statico isolato su `mininno.com/v-editor`
 - [x] Trascrizione locale (ffmpeg + whisper.cpp) con timecode a livello di parola
 - [x] Import nel collaborativo: parole ancorate al timecode (mark `timing`)
-- [ ] Player video sincronizzato (evidenzia la parola corrente)
+- [x] Player video sincronizzato: evidenzia la parola corrente, click-per-saltare
 - [ ] Export/montaggio DaVinci Resolve dai timecode superstiti

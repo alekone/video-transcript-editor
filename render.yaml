@@ -1,0 +1,14 @@
+# Blueprint Render: deploya il server realtime da GitHub.
+# Su render.com → New → Blueprint → seleziona il repo → Apply.
+# Ad ogni push su main, Render rebuilda e riavvia il servizio.
+services:
+  - type: web
+    name: v-editor-realtime
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm run start:server
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: "22"

@@ -3,9 +3,9 @@ import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Collaboration from "@tiptap/extension-collaboration";
 import CollaborationCursor from "@tiptap/extension-collaboration-cursor";
-import YPartyKitProvider from "y-partykit/provider";
+import { HocuspocusProvider } from "@hocuspocus/provider";
 import * as Y from "yjs";
-import { PARTYKIT_HOST } from "./lib/partykit";
+import { REALTIME_URL } from "./lib/realtime";
 import { Timing } from "./extensions/Timing";
 import { Playhead, setPlayheadTime } from "./extensions/Playhead";
 import type { TranscriptResult, TranscriptWord } from "./types";
@@ -45,7 +45,11 @@ export function Editor({ documentName }: { documentName: string }) {
 
   const { ydoc, provider } = useMemo(() => {
     const ydoc = new Y.Doc();
-    const provider = new YPartyKitProvider(PARTYKIT_HOST, documentName, ydoc);
+    const provider = new HocuspocusProvider({
+      url: REALTIME_URL,
+      name: documentName,
+      document: ydoc,
+    });
     return { ydoc, provider };
   }, [documentName]);
 
