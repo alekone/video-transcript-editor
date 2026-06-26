@@ -9,3 +9,5 @@ dist/
 .env.production
 .DS_Store
 .claude/settings.local.json
+models/
+transcript.json

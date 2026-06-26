@@ -15,23 +15,38 @@ h1 { font-size: 1.4rem; }
 }
 .ProseMirror:focus { outline: none; }
 
-/* Trascrizione */
-.transcriber { margin: 1rem 0; }
+code {
+  background: #eee;
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  font-size: 0.85em;
+}
+
+/* Toolbar import */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 1rem 0 0.5rem;
+  flex-wrap: wrap;
+}
 .upload {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.5rem 0.9rem;
+  padding: 0.4rem 0.8rem;
   border: 1px dashed #aaa;
   border-radius: 8px;
   cursor: pointer;
   font-size: 0.9rem;
 }
-.upload input { font-size: 0.8rem; }
+.upload input { font-size: 0.8rem; max-width: 200px; }
+.ok { color: #2b8a3e; font-size: 0.9rem; }
 .err { color: #c92a2a; font-size: 0.9rem; }
-.words { margin-top: 0.75rem; }
-.words .w { border-bottom: 1px dotted #ccc; cursor: help; }
-.words .w:hover { background: #fff3bf; }
+
+/* Parole con timecode (mark `timing`) */
+.editor .w { border-bottom: 1px dotted #ccc; cursor: help; }
+.editor .w:hover { background: #fff3bf; }
 
 /* Cursori dei collaboratori */
 .collaboration-cursor__caret {

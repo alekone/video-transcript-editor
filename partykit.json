@@ -2,8 +2,5 @@
   "$schema": "https://www.partykit.io/schema.json",
   "name": "v-editor",
   "main": "party/server.ts",
-  "parties": {
-    "transcribe": "party/transcribe.ts"
-  },
   "compatibilityDate": "2025-01-01"
 }

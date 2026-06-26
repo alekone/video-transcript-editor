@@ -11,8 +11,23 @@ Workflow tipo Descript: il testo trascritto è ancorato ai timecode; tagliando/s
 | Editing collaborativo realtime | Yjs (CRDT) + TipTap (ProseMirror) |
 | Backend realtime + (futuro) trascrizione | PartyKit (servizio gestito) |
 | Frontend | Vite + React + TypeScript |
-| Trascrizione | OpenAI `whisper-1` con timecode a livello di parola (adapter intercambiabile → whisper.cpp locale) |
+| Trascrizione | **Locale** — ffmpeg + whisper.cpp (Metal sul Mac). Nessun upload: gestisce video da 10+ GB. Timecode a livello di parola |
+| Ancoraggio timecode | Mark TipTap `timing` su ogni parola → sopravvive all'editing → base dell'EDL |
 | Montaggio | DaVinci Resolve (fase 2: API Python o export FCPXML/OTIO/EDL) |
+
+## Trascrizione di un video (locale)
+
+I video reali sono enormi (10+ GB) e non si caricano da nessuna parte: la
+trascrizione gira sul tuo Mac.
+
+```bash
+brew install ffmpeg whisper-cpp          # una volta sola
+npm run transcribe -- /percorso/video.mp4 --lang it
+# → genera transcript.json (il modello large-v3-turbo si scarica al primo uso)
+```
+
+Poi apri l'editor e premi **"Importa transcript.json"**: ogni parola entra come
+testo ancorato al suo timecode, editabile in collaborazione.
 
 ## Sviluppo locale
 
@@ -47,6 +62,7 @@ cd ../mininno.com && bun run deploy:veditor
 
 - [x] Editing collaborativo realtime (Yjs + TipTap + PartyKit), verificato in locale
 - [x] Setup deploy statico isolato su `mininno.com/v-editor`
-- [ ] Endpoint di trascrizione Whisper su PartyKit
-- [ ] Nodo `Word` con timecode + player video sincronizzato
-- [ ] Export/montaggio DaVinci Resolve
+- [x] Trascrizione locale (ffmpeg + whisper.cpp) con timecode a livello di parola
+- [x] Import nel collaborativo: parole ancorate al timecode (mark `timing`)
+- [ ] Player video sincronizzato (evidenzia la parola corrente)
+- [ ] Export/montaggio DaVinci Resolve dai timecode superstiti

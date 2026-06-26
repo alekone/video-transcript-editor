@@ -11,7 +11,8 @@
     "dev:party": "partykit dev",
     "dev:client": "npm run dev --workspace=client",
     "build:client": "npm run build --workspace=client",
-    "deploy:party": "partykit deploy"
+    "deploy:party": "partykit deploy",
+    "transcribe": "node scripts/transcribe.mjs"
   },
   "devDependencies": {
     "partykit": "^0.0.111",
