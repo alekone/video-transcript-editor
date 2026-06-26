@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.partykit/
+*.tsbuildinfo
+.env
+.env.production
+.DS_Store
+.claude/settings.local.json
