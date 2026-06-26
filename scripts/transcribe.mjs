@@ -31,7 +31,7 @@ const LANG = getOpt("lang", "auto");
 const OUT = resolve(getOpt("out", join(process.cwd(), "transcript.json")));
 
 if (!input) {
-  console.error("✗ Manca il file. Uso: npm run transcribe -- /path/al/video.mp4 [--model ..] [--lang it]");
+  console.error("✗ Manca il file. Uso: trascrivi /path/al/video.mp4 [--model ..] [--lang it]");
   process.exit(1);
 }
 const INPUT = resolve(input);

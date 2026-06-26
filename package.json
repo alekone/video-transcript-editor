@@ -6,6 +6,9 @@
   "workspaces": [
     "client"
   ],
+  "bin": {
+    "trascrivi": "scripts/transcribe.mjs"
+  },
   "scripts": {
     "dev": "partykit dev & npm run dev --workspace=client",
     "dev:party": "partykit dev",
