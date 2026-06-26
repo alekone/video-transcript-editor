@@ -80,8 +80,8 @@ function tokensToWords(full) {
   const words = [];
   for (const seg of full.transcription ?? []) {
     for (const tok of seg.tokens ?? []) {
-      const raw = tok.text ?? "";
-      if (/^\[_.*_\]$/.test(raw)) continue; // token speciali ([_BEG_], ecc.)
+      // token speciali whisper.cpp: [_BEG_], [_EOT_], [_TT_488] (timestamp), ecc.
+      let raw = (tok.text ?? "").replace(/\[_[^\]]*\]/g, "");
       if (raw.trim() === "") continue;
       const start = (tok.offsets?.from ?? 0) / 1000;
       const end = (tok.offsets?.to ?? 0) / 1000;
