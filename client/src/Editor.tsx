@@ -10,6 +10,7 @@ import { REALTIME_URL } from "./lib/realtime";
 import { Timing } from "./extensions/Timing";
 import { Playhead, setPlayheadTime } from "./extensions/Playhead";
 import {
+  buildEDL,
   buildSegments,
   collectKeptWords,
   downloadText,
@@ -133,6 +134,7 @@ export function Editor({ documentName }: { documentName: string }) {
       editor.commands.setContent(wordsToDoc(data.words, spks));
       meta.set("originalWords", JSON.stringify(data.words));
       meta.set("speakers", JSON.stringify(spks));
+      if (data.source) meta.set("source", data.source);
       setSpeakers(spks);
       setImported(data.words.length);
     } catch (err) {
@@ -200,6 +202,19 @@ export function Editor({ documentName }: { documentName: string }) {
     );
   }
 
+  function exportEDL() {
+    const seg = getSegments();
+    if (!seg) return;
+    const fpsRaw = prompt("Frame rate del video (fps)?", "25");
+    if (fpsRaw == null) return;
+    const fps = Number(fpsRaw) || 25;
+    const source = (meta.get("source") as string) || "video.mp4";
+    downloadText(
+      `${documentName}.edl`,
+      buildEDL(seg.keep, { fps, source, title: documentName })
+    );
+  }
+
   if (!editor) return <p>Caricamento editor…</p>;
 
   return (
@@ -215,6 +230,7 @@ export function Editor({ documentName }: { documentName: string }) {
         </label>
         <button className="btn" onClick={exportKeep}>Esporta tenuti</button>
         <button className="btn" onClick={exportCut}>Esporta tagli (montatore)</button>
+        <button className="btn" onClick={exportEDL}>Esporta EDL (DaVinci)</button>
         {imported != null && <span className="ok">✓ {imported} parole importate</span>}
         {error && <span className="err">⚠ {error}</span>}
       </div>

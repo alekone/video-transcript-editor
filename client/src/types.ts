@@ -13,4 +13,5 @@ export interface TranscriptResult {
   words: TranscriptWord[];
   language?: string;
   duration?: number; // secondi
+  source?: string; // nome del file video originale
 }

@@ -82,6 +82,45 @@ export function segmentsToText(segments: Segment[], title: string): string {
   ].join("\n");
 }
 
+// --- Export EDL (CMX3600) per DaVinci Resolve --------------------------
+// Timecode frame-accurate HH:MM:SS:FF al frame rate del progetto.
+function tcFrames(seconds: number, fps: number): string {
+  let f = Math.round(seconds * fps);
+  const ff = f % fps;
+  let t = Math.floor(f / fps);
+  const ss = t % 60;
+  t = Math.floor(t / 60);
+  const mm = t % 60;
+  const hh = Math.floor(t / 60);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(hh)}:${p(mm)}:${p(ss)}:${p(ff)}`;
+}
+
+// Costruisce un EDL dai segmenti TENUTI: ognuno è un evento con source in/out
+// (dal video originale) e record in/out (sequenziale sulla timeline montata).
+export function buildEDL(
+  keep: Segment[],
+  opts: { fps?: number; source?: string; title?: string } = {}
+): string {
+  const fps = opts.fps ?? 25;
+  const source = opts.source ?? "video.mp4";
+  const title = opts.title ?? "v-editor";
+  const lines = [`TITLE: ${title}`, "FCM: NON-DROP FRAME", ""];
+  let rec = 0; // posizione corrente sulla timeline, in secondi
+  keep.forEach((seg, i) => {
+    const dur = seg.end - seg.start;
+    const num = String(i + 1).padStart(3, "0");
+    lines.push(
+      `${num}  AX       V     C        ` +
+        `${tcFrames(seg.start, fps)} ${tcFrames(seg.end, fps)} ` +
+        `${tcFrames(rec, fps)} ${tcFrames(rec + dur, fps)}`
+    );
+    lines.push(`* FROM CLIP NAME: ${source}`);
+    rec += dur;
+  });
+  return lines.join("\n") + "\n";
+}
+
 export function downloadText(filename: string, content: string) {
   const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
   const url = URL.createObjectURL(blob);
