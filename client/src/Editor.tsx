@@ -21,14 +21,31 @@ const COLORS = ["#f783ac", "#4dabf7", "#69db7c", "#ffd43b", "#9775fa", "#ff922b"
 const randomName = () => `Utente ${Math.floor(Math.random() * 1000)}`;
 const randomColor = () => COLORS[Math.floor(Math.random() * COLORS.length)];
 
-// transcript.json (parole con timecode) → documento ProseMirror in cui ogni
-// parola è testo con il mark `timing`. Una frase = un paragrafo (split sulla
-// punteggiatura forte) per un editing più comodo.
-function wordsToDoc(words: TranscriptWord[]) {
-  const paragraphs: TranscriptWord[][] = [[]];
+// Ordine di comparsa degli speaker → usato per assegnare i colori.
+function speakerOrder(words: TranscriptWord[]): string[] {
+  const seen: string[] = [];
   for (const w of words) {
-    paragraphs[paragraphs.length - 1].push(w);
-    if (/[.!?…]$/.test(w.text)) paragraphs.push([]);
+    if (w.speaker && !seen.includes(w.speaker)) seen.push(w.speaker);
+  }
+  return seen;
+}
+
+// transcript.json (parole con timecode) → documento ProseMirror in cui ogni
+// parola è testo con il mark `timing`. Nuovo paragrafo al cambio di speaker
+// (o sulla punteggiatura forte) e colore per speaker.
+function wordsToDoc(words: TranscriptWord[], speakers: string[]) {
+  const spkIndex = (s?: string) =>
+    s ? speakers.indexOf(s) % 8 : null;
+
+  const paragraphs: TranscriptWord[][] = [[]];
+  let prevSpeaker: string | undefined;
+  for (const w of words) {
+    const cur = paragraphs[paragraphs.length - 1];
+    const speakerChanged = w.speaker != null && w.speaker !== prevSpeaker && cur.length > 0;
+    if (speakerChanged) paragraphs.push([w]);
+    else cur.push(w);
+    if (w.speaker) prevSpeaker = w.speaker;
+    if (/[.!?…]$/.test(w.text) && !w.speaker) paragraphs.push([]);
   }
   const content = paragraphs
     .filter((p) => p.length > 0)
@@ -37,7 +54,17 @@ function wordsToDoc(words: TranscriptWord[]) {
       content: p.map((w) => ({
         type: "text",
         text: w.text + " ",
-        marks: [{ type: "timing", attrs: { start: w.start, end: w.end } }],
+        marks: [
+          {
+            type: "timing",
+            attrs: {
+              start: w.start,
+              end: w.end,
+              speaker: w.speaker ?? null,
+              spk: spkIndex(w.speaker),
+            },
+          },
+        ],
       })),
     }));
   return { type: "doc", content: content.length ? content : [{ type: "paragraph" }] };
@@ -47,6 +74,7 @@ export function Editor({ documentName }: { documentName: string }) {
   const [imported, setImported] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [speakers, setSpeakers] = useState<string[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -69,6 +97,18 @@ export function Editor({ documentName }: { documentName: string }) {
 
   useEffect(() => () => provider.destroy(), [provider]);
 
+  // Legenda speaker: leggi da meta e tieniti aggiornato (anche per chi si
+  // unisce a un documento già diarizzato senza re-importare).
+  useEffect(() => {
+    const read = () => {
+      const raw = meta.get("speakers");
+      if (raw) setSpeakers(JSON.parse(raw));
+    };
+    read();
+    meta.observe(read);
+    return () => meta.unobserve(read);
+  }, [meta]);
+
   const editor = useEditor({
     extensions: [
       StarterKit.configure({ history: false }),
@@ -89,8 +129,11 @@ export function Editor({ documentName }: { documentName: string }) {
     try {
       const data = JSON.parse(await file.text()) as TranscriptResult;
       if (!Array.isArray(data.words)) throw new Error("transcript.json senza campo 'words'");
-      editor.commands.setContent(wordsToDoc(data.words));
+      const spks = speakerOrder(data.words);
+      editor.commands.setContent(wordsToDoc(data.words, spks));
       meta.set("originalWords", JSON.stringify(data.words));
+      meta.set("speakers", JSON.stringify(spks));
+      setSpeakers(spks);
       setImported(data.words.length);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -175,6 +218,16 @@ export function Editor({ documentName }: { documentName: string }) {
         {imported != null && <span className="ok">✓ {imported} parole importate</span>}
         {error && <span className="err">⚠ {error}</span>}
       </div>
+
+      {speakers.length > 0 && (
+        <div className="legend">
+          {speakers.map((s, i) => (
+            <span key={s} className={`legend-item spk-${i % 8}`}>
+              ● {s}
+            </span>
+          ))}
+        </div>
+      )}
 
       {videoUrl && (
         <video

@@ -74,6 +74,27 @@ code {
 /* Parola in riproduzione */
 .editor .playing { background: #ffd43b; border-radius: 2px; }
 
+/* Colori per speaker (8 colori, ciclici) */
+.spk-0 { color: #1971c2; }
+.spk-1 { color: #c2255c; }
+.spk-2 { color: #2f9e44; }
+.spk-3 { color: #e8590c; }
+.spk-4 { color: #6741d9; }
+.spk-5 { color: #0c8599; }
+.spk-6 { color: #ae3ec9; }
+.spk-7 { color: #f08c00; }
+
+/* Legenda speaker */
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin: 0.5rem 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+.legend-item { white-space: nowrap; }
+
 /* Cursori dei collaboratori */
 .collaboration-cursor__caret {
   border-left: 1px solid #0d0d0d;

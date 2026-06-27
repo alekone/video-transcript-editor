@@ -22,12 +22,31 @@ trascrizione gira sul tuo Mac.
 
 ```bash
 brew install ffmpeg whisper-cpp          # una volta sola
-npm run transcribe -- /percorso/video.mp4 --lang it
+trascrivi /percorso/video.mp4 --lang it  # comando globale (npm link)
 # → genera transcript.json (il modello large-v3-turbo si scarica al primo uso)
 ```
 
 Poi apri l'editor e premi **"Importa transcript.json"**: ogni parola entra come
 testo ancorato al suo timecode, editabile in collaborazione.
+
+### Speaker (chi parla) — opzionale
+
+Diarizzazione locale con sherpa-onnx (nessun account/token). Setup una volta:
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install sherpa-onnx soundfile numpy
+# modelli in models/diarization/: segmentation (pyannote-3.0) + embedding
+#   (vedi gli URL delle release k2-fsa/sherpa-onnx)
+```
+
+Poi aggiungi `--speakers N` (numero di interlocutori noto) o `--speakers auto`:
+
+```bash
+trascrivi intervista.mp4 --lang it --speakers 2
+```
+
+Nell'editor ogni speaker ha un colore e una voce nella legenda; i turni vanno
+a capo automaticamente.
 
 ## Sviluppo locale
 
@@ -64,6 +83,9 @@ cd ../mininno.com && bun run deploy:veditor
 - [x] Editing collaborativo realtime (Yjs + TipTap + Hocuspocus), verificato in locale
 - [x] Setup deploy statico isolato su `mininno.com/v-editor`
 - [x] Trascrizione locale (ffmpeg + whisper.cpp) con timecode a livello di parola
+- [x] Diarizzazione locale (sherpa-onnx): speaker a colori nell'editor
 - [x] Import nel collaborativo: parole ancorate al timecode (mark `timing`)
 - [x] Player video sincronizzato: evidenzia la parola corrente, click-per-saltare
+- [x] Persistenza locale + export segmenti tenuti/tagliati con timecode
+- [ ] URL per progetto (`?doc=`)
 - [ ] Export/montaggio DaVinci Resolve dai timecode superstiti

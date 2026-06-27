@@ -29,6 +29,8 @@ const getOpt = (name, def) => {
 const MODEL = getOpt("model", "large-v3-turbo");
 const LANG = getOpt("lang", "auto");
 const OUT = resolve(getOpt("out", join(process.cwd(), "transcript.json")));
+// --speakers N  → diarizzazione con N speaker. --speakers auto → rilevamento automatico.
+const SPEAKERS = getOpt("speakers", null);
 
 if (!input) {
   console.error("✗ Manca il file. Uso: trascrivi /path/al/video.mp4 [--model ..] [--lang it]");
@@ -55,6 +57,50 @@ const which = (cmd) =>
     p.stdout.on("data", (d) => (out += d));
     p.on("close", (code) => res(code === 0 ? out.trim() : null));
   });
+
+// Esegue un comando catturandone lo stdout (stderr passa a video).
+const runCapture = (cmd, args) =>
+  new Promise((res, rej) => {
+    const p = spawn(cmd, args, { stdio: ["ignore", "pipe", "inherit"] });
+    let out = "";
+    p.stdout.on("data", (d) => (out += d));
+    p.on("error", rej);
+    p.on("close", (code) => (code === 0 ? res(out) : rej(new Error(`${cmd} uscito con codice ${code}`))));
+  });
+
+// ---- diarizzazione (chi parla quando) -----------------------------------
+async function diarize(wav) {
+  const py = join(ROOT, ".venv", "bin", "python");
+  if (!existsSync(py)) {
+    throw new Error(
+      "Diarizzazione non configurata. Esegui:\n" +
+      "  python3 -m venv .venv && .venv/bin/pip install sherpa-onnx soundfile numpy\n" +
+      "e scarica i modelli in models/diarization/ (vedi README)."
+    );
+  }
+  const args = [join(ROOT, "scripts", "diarize.py"), wav];
+  if (SPEAKERS && SPEAKERS !== "auto") args.push("--num-speakers", SPEAKERS);
+  const out = await runCapture(py, args);
+  return JSON.parse(out); // [{start, end, speaker}]
+}
+
+// Assegna a ogni parola lo speaker del segmento che contiene il suo punto medio
+// (o, se nessuno, il segmento più vicino).
+function assignSpeakers(words, segments) {
+  if (!segments.length) return;
+  for (const w of words) {
+    const mid = (w.start + w.end) / 2;
+    let hit = segments.find((s) => s.start <= mid && mid < s.end);
+    if (!hit) {
+      let best = Infinity;
+      for (const s of segments) {
+        const d = mid < s.start ? s.start - mid : mid - s.end;
+        if (d < best) { best = d; hit = s; }
+      }
+    }
+    if (hit) w.speaker = hit.speaker;
+  }
+}
 
 // ---- pre-requisiti -------------------------------------------------------
 async function findWhisper() {
@@ -128,6 +174,15 @@ function tokensToWords(full) {
 
   const full = JSON.parse(readFileSync(`${base}.json`, "utf8"));
   const words = tokensToWords(full);
+
+  if (SPEAKERS) {
+    console.log(`→ Diarizzazione (speaker: ${SPEAKERS})…`);
+    const segments = await diarize(wav);
+    assignSpeakers(words, segments);
+    const n = new Set(words.map((w) => w.speaker).filter(Boolean)).size;
+    console.log(`  ${n} speaker assegnati alle parole.`);
+  }
+
   const text = words.map((w) => w.text).join(" ");
   const out = {
     text,

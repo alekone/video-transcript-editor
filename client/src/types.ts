@@ -5,6 +5,7 @@ export interface TranscriptWord {
   text: string;
   start: number; // secondi
   end: number; // secondi
+  speaker?: string; // es. "SPEAKER_00" (presente solo se diarizzato)
 }
 
 export interface TranscriptResult {

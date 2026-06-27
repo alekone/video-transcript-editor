@@ -29,6 +29,22 @@ export const Timing = Mark.create({
         renderHTML: (attrs) =>
           attrs.end == null ? {} : { "data-end": String(attrs.end) },
       },
+      speaker: {
+        default: null,
+        parseHTML: (el) => el.getAttribute("data-speaker"),
+        renderHTML: (attrs) =>
+          attrs.speaker == null ? {} : { "data-speaker": String(attrs.speaker) },
+      },
+      // indice colore (0..7) dello speaker, calcolato all'import
+      spk: {
+        default: null,
+        parseHTML: (el) => {
+          const v = el.getAttribute("data-spk");
+          return v == null ? null : Number(v);
+        },
+        renderHTML: (attrs) =>
+          attrs.spk == null ? {} : { "data-spk": String(attrs.spk) },
+      },
     };
   },
 
@@ -37,9 +53,15 @@ export const Timing = Mark.create({
   },
 
   renderHTML({ HTMLAttributes, mark }) {
-    const { start, end } = mark.attrs as { start: number | null; end: number | null };
-    const title =
-      start == null ? undefined : `${start.toFixed(2)}s → ${end?.toFixed(2)}s`;
-    return ["span", mergeAttributes(HTMLAttributes, { class: "w", title }), 0];
+    const { start, end, speaker, spk } = mark.attrs as {
+      start: number | null;
+      end: number | null;
+      speaker: string | null;
+      spk: number | null;
+    };
+    const tc = start == null ? "" : `${start.toFixed(2)}s → ${end?.toFixed(2)}s`;
+    const title = speaker ? `${speaker} · ${tc}` : tc || undefined;
+    const cls = spk == null ? "w" : `w spk-${spk}`;
+    return ["span", mergeAttributes(HTMLAttributes, { class: cls, title }), 0];
   },
 });
