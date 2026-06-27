@@ -4,10 +4,17 @@ import StarterKit from "@tiptap/starter-kit";
 import Collaboration from "@tiptap/extension-collaboration";
 import CollaborationCursor from "@tiptap/extension-collaboration-cursor";
 import { HocuspocusProvider } from "@hocuspocus/provider";
+import { IndexeddbPersistence } from "y-indexeddb";
 import * as Y from "yjs";
 import { REALTIME_URL } from "./lib/realtime";
 import { Timing } from "./extensions/Timing";
 import { Playhead, setPlayheadTime } from "./extensions/Playhead";
+import {
+  buildSegments,
+  collectKeptWords,
+  downloadText,
+  segmentsToText,
+} from "./lib/exports";
 import type { TranscriptResult, TranscriptWord } from "./types";
 
 const COLORS = ["#f783ac", "#4dabf7", "#69db7c", "#ffd43b", "#9775fa", "#ff922b"];
@@ -43,14 +50,21 @@ export function Editor({ documentName }: { documentName: string }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
-  const { ydoc, provider } = useMemo(() => {
+  // ydoc + sync col server (Render) + persistenza locale (IndexedDB).
+  // La copia locale fa sopravvivere gli edit anche se il server si riavvia:
+  // alla riconnessione il client ri-sincronizza il documento.
+  const { ydoc, provider, meta } = useMemo(() => {
     const ydoc = new Y.Doc();
+    new IndexeddbPersistence(`v-editor:${documentName}`, ydoc);
     const provider = new HocuspocusProvider({
       url: REALTIME_URL,
       name: documentName,
       document: ydoc,
     });
-    return { ydoc, provider };
+    // Conserviamo il transcript originale nel doc condiviso: serve per
+    // calcolare le PARTI TAGLIATE (originale − sopravvissuto).
+    const meta = ydoc.getMap<string>("meta");
+    return { ydoc, provider, meta };
   }, [documentName]);
 
   useEffect(() => () => provider.destroy(), [provider]);
@@ -76,6 +90,7 @@ export function Editor({ documentName }: { documentName: string }) {
       const data = JSON.parse(await file.text()) as TranscriptResult;
       if (!Array.isArray(data.words)) throw new Error("transcript.json senza campo 'words'");
       editor.commands.setContent(wordsToDoc(data.words));
+      meta.set("originalWords", JSON.stringify(data.words));
       setImported(data.words.length);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -112,6 +127,36 @@ export function Editor({ documentName }: { documentName: string }) {
     }
   }
 
+  function getSegments() {
+    if (!editor) return null;
+    const raw = meta.get("originalWords");
+    const original: TranscriptWord[] = raw ? JSON.parse(raw) : [];
+    const kept = collectKeptWords(editor);
+    return { ...buildSegments(original, kept), hasOriginal: original.length > 0 };
+  }
+
+  function exportKeep() {
+    const seg = getSegments();
+    if (!seg) return;
+    downloadText(
+      `${documentName}-da-tenere.txt`,
+      segmentsToText(seg.keep, "PARTI DA TENERE (timecode del video originale)")
+    );
+  }
+
+  function exportCut() {
+    const seg = getSegments();
+    if (!seg) return;
+    if (!seg.hasOriginal) {
+      setError("Per esportare i tagli devi prima importare il transcript.json originale.");
+      return;
+    }
+    downloadText(
+      `${documentName}-tagli.txt`,
+      segmentsToText(seg.cut, "PARTI TAGLIATE — da rimuovere (per il montatore)")
+    );
+  }
+
   if (!editor) return <p>Caricamento editor…</p>;
 
   return (
@@ -125,6 +170,8 @@ export function Editor({ documentName }: { documentName: string }) {
           <input type="file" accept="video/*,audio/*" onChange={onPickVideo} />
           Apri video
         </label>
+        <button className="btn" onClick={exportKeep}>Esporta tenuti</button>
+        <button className="btn" onClick={exportCut}>Esporta tagli (montatore)</button>
         {imported != null && <span className="ok">✓ {imported} parole importate</span>}
         {error && <span className="err">⚠ {error}</span>}
       </div>
