@@ -110,8 +110,9 @@ export function buildEDL(
   keep.forEach((seg, i) => {
     const dur = seg.end - seg.start;
     const num = String(i + 1).padStart(3, "0");
+    // Canale "B" = video + audio: l'EDL monta sia immagine sia parlato.
     lines.push(
-      `${num}  AX       V     C        ` +
+      `${num}  AX       B     C        ` +
         `${tcFrames(seg.start, fps)} ${tcFrames(seg.end, fps)} ` +
         `${tcFrames(rec, fps)} ${tcFrames(rec + dur, fps)}`
     );
