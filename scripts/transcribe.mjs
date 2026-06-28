@@ -17,7 +17,9 @@ import { tmpdir } from "node:os";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
-const MODELS_DIR = join(ROOT, "models");
+// Override dei percorsi (usati dall'app Electron, dove le risorse non stanno
+// nel progetto). Default: layout del progetto.
+const MODELS_DIR = process.env.VTE_MODELS_DIR || join(ROOT, "models");
 
 // ---- parsing argomenti --------------------------------------------------
 const argv = process.argv.slice(2);
@@ -70,7 +72,7 @@ const runCapture = (cmd, args) =>
 
 // ---- diarizzazione (chi parla quando) -----------------------------------
 async function diarize(wav) {
-  const py = join(ROOT, ".venv", "bin", "python");
+  const py = process.env.VTE_PYTHON || join(ROOT, ".venv", "bin", "python");
   if (!existsSync(py)) {
     throw new Error(
       "Diarizzazione non configurata. Esegui:\n" +
@@ -80,6 +82,7 @@ async function diarize(wav) {
   }
   const args = [join(ROOT, "scripts", "diarize.py"), wav];
   if (SPEAKERS && SPEAKERS !== "auto") args.push("--num-speakers", SPEAKERS);
+  // VTE_DIARIZE_MODELS dice a diarize.py dove sono i modelli (override bundle).
   const out = await runCapture(py, args);
   return JSON.parse(out); // [{start, end, speaker}]
 }

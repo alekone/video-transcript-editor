@@ -1,10 +1,13 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-// base "/v-editor/" perché l'app è servita dalla sottocartella di mininno.com.
-// In dev resta "/v-editor/" così i path combaciano con la produzione.
+// Web: base "/v-editor/" (sottocartella di mininno.com).
+// Electron (ELECTRON=1): base "./" per caricare gli asset da file:// nel bundle.
 export default defineConfig({
-  base: "/v-editor/",
+  base: process.env.ELECTRON ? "./" : "/v-editor/",
+  build: {
+    outDir: process.env.ELECTRON ? "dist-electron" : "dist",
+  },
   plugins: [react()],
   server: { port: 5173 },
 });

@@ -16,7 +16,8 @@ import sherpa_onnx
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-MODELS = os.path.join(ROOT, "models", "diarization")
+# Override (app Electron): VTE_DIARIZE_MODELS. Default: layout del progetto.
+MODELS = os.environ.get("VTE_DIARIZE_MODELS") or os.path.join(ROOT, "models", "diarization")
 SEG = os.path.join(MODELS, "sherpa-onnx-pyannote-segmentation-3-0", "model.onnx")
 EMB = os.path.join(MODELS, "embedding.onnx")
 

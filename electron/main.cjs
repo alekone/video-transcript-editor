@@ -5,15 +5,30 @@ const path = require("node:path");
 const os = require("node:os");
 const fs = require("node:fs");
 
+const isDev = !app.isPackaged;
 const ROOT = path.join(__dirname, "..");
-// In dev carichiamo il dev server Vite; in prod i file buildati (fase 2).
 const DEV_URL = process.env.ELECTRON_RENDERER_URL || "http://localhost:5173/v-editor/";
 
-// Protocollo "media://" per riprodurre video locali (10+ GB) con range request,
-// senza caricarli in memoria e senza disabilitare la web security.
-protocol.registerSchemesAsPrivileged([
-  { scheme: "media", privileges: { stream: true, supportFetchAPI: true, secure: true, bypassCSP: true } },
-]);
+// PATH di un'app GUI su macOS non include /opt/homebrew/bin: lo aggiungiamo
+// così i sottoprocessi trovano ffmpeg / whisper-cli / python.
+const BIN_PATHS = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"];
+
+// Percorsi delle risorse "engine": in dev stanno nel progetto; nel bundle
+// vengono copiate in resources/engine (extraResources).
+function enginePaths() {
+  const base = isDev ? ROOT : path.join(process.resourcesPath, "engine");
+  const userData = app.getPath("userData");
+  return {
+    transcribeScript: path.join(base, "scripts", "transcribe.mjs"),
+    diarizeModels: path.join(base, "models", "diarization"),
+    // modelli whisper: cartella scrivibile (auto-download al primo uso)
+    whisperModels: isDev ? path.join(ROOT, "models") : path.join(userData, "whisper-models"),
+    // python con sherpa-onnx: in dev il venv del progetto, nel bundle in userData
+    venvPython: isDev
+      ? path.join(ROOT, ".venv", "bin", "python")
+      : path.join(userData, "diar-venv", "bin", "python"),
+  };
+}
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -26,15 +41,15 @@ function createWindow() {
       nodeIntegration: false,
     },
   });
-  win.webContents.on("did-finish-load", () => console.log("[main] renderer caricato:", DEV_URL));
-  win.webContents.on("did-fail-load", (_e, code, desc) => console.error("[main] load fallito:", code, desc));
-  win.loadURL(DEV_URL);
+  win.webContents.on("did-finish-load", () => console.log("[main] renderer caricato"));
+  win.webContents.on("did-fail-load", (_e, c, d) => console.error("[main] load fallito:", c, d));
+  if (isDev) win.loadURL(DEV_URL);
+  else win.loadFile(path.join(__dirname, "..", "client", "dist-electron", "index.html"));
   return win;
 }
 
 app.whenReady().then(() => {
   protocol.handle("media", (request) => {
-    // media://x<encoded-absolute-path>  →  file://<path> (con range)
     const u = new URL(request.url);
     const filePath = decodeURIComponent(u.pathname);
     return net.fetch(pathToFileURL(filePath).toString(), {
@@ -42,9 +57,7 @@ app.whenReady().then(() => {
       method: request.method,
     });
   });
-
   createWindow();
-
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
@@ -53,6 +66,10 @@ app.whenReady().then(() => {
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
+
+protocol.registerSchemesAsPrivileged([
+  { scheme: "media", privileges: { stream: true, supportFetchAPI: true, secure: true, bypassCSP: true } },
+]);
 
 // --- IPC -----------------------------------------------------------------
 
@@ -65,17 +82,52 @@ ipcMain.handle("open-video", async () => {
   return r.canceled || !r.filePaths[0] ? null : r.filePaths[0];
 });
 
-// Lancia la pipeline locale (riusa scripts/transcribe.mjs: ffmpeg + whisper.cpp
-// + diarizzazione). Manda l'avanzamento al renderer, ritorna il transcript.
+// Crea (una volta) il venv per la diarizzazione se manca.
+function ensureDiarVenv(python, onLog) {
+  if (fs.existsSync(python)) return Promise.resolve(true);
+  const venvDir = path.dirname(path.dirname(python));
+  onLog(`Preparo l'ambiente per gli speaker (una volta sola)…\n`);
+  const sh = (cmd, args) =>
+    new Promise((res, rej) => {
+      const p = spawn(cmd, args, { env: { ...process.env, PATH: BIN_PATHS.concat(process.env.PATH || "").join(":") } });
+      p.stdout.on("data", (d) => onLog(d.toString()));
+      p.stderr.on("data", (d) => onLog(d.toString()));
+      p.on("error", rej);
+      p.on("close", (c) => (c === 0 ? res() : rej(new Error("setup venv fallito"))));
+    });
+  return sh("python3", ["-m", "venv", venvDir])
+    .then(() => sh(python, ["-m", "pip", "install", "-q", "sherpa-onnx", "soundfile", "numpy"]))
+    .then(() => true)
+    .catch(() => false);
+}
+
 ipcMain.handle("transcribe", async (e, videoPath, opts = {}) => {
+  const eng = enginePaths();
   const out = path.join(os.tmpdir(), `vte-${Date.now()}.json`);
-  const args = [path.join(ROOT, "scripts", "transcribe.mjs"), videoPath, "--lang", opts.lang || "it", "--out", out];
-  const spk = (opts.speakers || "").trim();
-  if (spk) args.push("--speakers", spk);
+  const send = (d) => e.sender.send("transcribe-progress", d.toString());
+  const wantSpeakers = !!(opts.speakers || "").trim();
+
+  // diarizzazione: assicura il venv (nel bundle lo crea in userData)
+  if (wantSpeakers && !fs.existsSync(eng.venvPython)) {
+    const ok = await ensureDiarVenv(eng.venvPython, send);
+    if (!ok) send("⚠ Diarizzazione non disponibile, procedo senza speaker.\n");
+  }
+
+  const args = [eng.transcribeScript, videoPath, "--lang", opts.lang || "it", "--out", out];
+  if (wantSpeakers && fs.existsSync(eng.venvPython)) args.push("--speakers", opts.speakers.trim());
 
   await new Promise((resolve, reject) => {
-    const p = spawn("node", args, { cwd: ROOT });
-    const send = (d) => e.sender.send("transcribe-progress", d.toString());
+    const p = spawn(process.execPath, args, {
+      cwd: path.dirname(eng.transcribeScript),
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: "1", // usa il node di Electron, niente node di sistema
+        PATH: BIN_PATHS.concat(process.env.PATH || "").join(":"),
+        VTE_MODELS_DIR: eng.whisperModels,
+        VTE_PYTHON: eng.venvPython,
+        VTE_DIARIZE_MODELS: eng.diarizeModels,
+      },
+    });
     p.stdout.on("data", send);
     p.stderr.on("data", send);
     p.on("error", reject);
@@ -87,7 +139,7 @@ ipcMain.handle("transcribe", async (e, videoPath, opts = {}) => {
   return data;
 });
 
-ipcMain.handle("save-project", async (e, data, suggestedName) => {
+ipcMain.handle("save-project", async (_e, data, suggestedName) => {
   const r = await dialog.showSaveDialog({ defaultPath: `${suggestedName}.vte.json` });
   if (r.canceled || !r.filePath) return null;
   fs.writeFileSync(r.filePath, JSON.stringify(data, null, 2));

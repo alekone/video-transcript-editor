@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "main": "electron/main.cjs",
   "workspaces": [
     "client",
     "server"
@@ -18,10 +19,32 @@
     "build:client": "npm run build --workspace=client",
     "transcribe": "node scripts/transcribe.mjs",
     "app": "electron electron/main.cjs",
-    "app:dev": "npm run dev:client & (until curl -sf http://localhost:5173/v-editor/ >/dev/null; do sleep 0.5; done; electron electron/main.cjs)"
+    "app:dev": "npm run dev:client & (until curl -sf http://localhost:5173/v-editor/ >/dev/null; do sleep 0.5; done; electron electron/main.cjs)",
+    "build:app-renderer": "ELECTRON=1 npm run build --workspace=client",
+    "dist:mac": "npm run build:app-renderer && electron-builder --mac"
   },
   "devDependencies": {
-    "electron": "^33.0.0"
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.mininno.veditor",
+    "productName": "v-editor",
+    "directories": { "output": "release" },
+    "files": [
+      "electron/**",
+      "client/dist-electron/**",
+      "package.json"
+    ],
+    "extraResources": [
+      { "from": "scripts", "to": "engine/scripts" },
+      { "from": "models/diarization", "to": "engine/models/diarization" }
+    ],
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.video",
+      "identity": null
+    }
   },
   "allowScripts": {
     "esbuild@0.28.1": true,
