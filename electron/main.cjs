@@ -10,6 +10,22 @@ const isDev = !app.isPackaged;
 const ROOT = path.join(__dirname, "..");
 const DEV_URL = process.env.ELECTRON_RENDERER_URL || "http://localhost:5173/v-editor/";
 
+// Diagnostica: invece di crashare in silenzio, logga su file e mostra il
+// messaggio. Il log è in ~/Library/Application Support/v-editor/crash.log.
+function logCrash(kind, err) {
+  const msg = `[${kind}] ${err && err.stack ? err.stack : err}\n`;
+  try {
+    const dir = app.getPath("userData");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.appendFileSync(path.join(dir, "crash.log"), `${new Date().toISOString()} ${msg}`);
+  } catch {}
+  try {
+    dialog.showErrorBox("v-editor — errore", String(err && err.message ? err.message : err));
+  } catch {}
+}
+process.on("uncaughtException", (e) => logCrash("uncaughtException", e));
+process.on("unhandledRejection", (e) => logCrash("unhandledRejection", e));
+
 // PATH di un'app GUI su macOS non include /opt/homebrew/bin: lo aggiungiamo
 // così i sottoprocessi trovano ffmpeg / whisper-cli / python.
 const BIN_PATHS = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"];
@@ -44,19 +60,28 @@ function createWindow() {
   });
   win.webContents.on("did-finish-load", () => console.log("[main] renderer caricato"));
   win.webContents.on("did-fail-load", (_e, c, d) => console.error("[main] load fallito:", c, d));
+  win.webContents.on("render-process-gone", (_e, details) =>
+    logCrash("render-process-gone", `${details.reason} (exitCode ${details.exitCode})`)
+  );
+  win.webContents.on("unresponsive", () => logCrash("unresponsive", "renderer bloccato"));
   if (isDev) win.loadURL(DEV_URL);
   else win.loadFile(path.join(__dirname, "..", "client", "dist-electron", "index.html"));
   return win;
 }
 
 app.whenReady().then(() => {
-  protocol.handle("media", (request) => {
-    const u = new URL(request.url);
-    const filePath = decodeURIComponent(u.pathname);
-    return net.fetch(pathToFileURL(filePath).toString(), {
-      headers: request.headers,
-      method: request.method,
-    });
+  protocol.handle("media", async (request) => {
+    try {
+      const u = new URL(request.url);
+      const filePath = decodeURIComponent(u.pathname);
+      return await net.fetch(pathToFileURL(filePath).toString(), {
+        headers: request.headers,
+        method: request.method,
+      });
+    } catch (err) {
+      logCrash("media-protocol", err);
+      return new Response("", { status: 500 });
+    }
   });
   createWindow();
   app.on("activate", () => {
@@ -160,8 +185,10 @@ ipcMain.handle("transcribe", async (e, videoPath, opts = {}) => {
     p.stderr.on("data", send);
     p.on("error", reject);
     p.on("close", (code) => {
-      e.sender.off?.("destroyed", onGone);
-      if (e.sender.isDestroyed()) resolve(); // finestra chiusa: esci pulito
+      try { e.sender.off?.("destroyed", onGone); } catch {}
+      let destroyed = false;
+      try { destroyed = e.sender.isDestroyed(); } catch { destroyed = true; }
+      if (destroyed) resolve(); // finestra chiusa: esci pulito
       else if (code === 0) resolve();
       else reject(new Error(`Trascrizione fallita (codice ${code})`));
     });
