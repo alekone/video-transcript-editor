@@ -1,7 +1,7 @@
+import { useState } from "react";
 import { Editor } from "./Editor";
 
-// Il progetto (= stanza di collaborazione) è scelto dall'URL: ?doc=nome.
-// Collaboratori che aprono lo stesso URL editano lo stesso documento.
+// Il progetto (= stanza/URL) è scelto dall'URL: ?doc=nome.
 function sanitizeDoc(s: string): string {
   return s.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
 }
@@ -10,31 +10,27 @@ function currentDoc(): string {
   return (raw && sanitizeDoc(raw)) || "trascrizione-demo";
 }
 
-function openProject() {
-  const name = prompt("Nome del progetto (condividi l'URL per collaborare):");
-  if (!name) return;
-  const doc = sanitizeDoc(name);
-  if (doc) location.search = `?doc=${encodeURIComponent(doc)}`;
-}
-
 export function App() {
   const doc = currentDoc();
+  const [name, setName] = useState(doc);
+
+  function commit() {
+    const slug = sanitizeDoc(name);
+    if (slug && slug !== doc) location.search = `?doc=${encodeURIComponent(slug)}`;
+  }
+
   return (
     <main>
-      <h1>Editor trascrizioni — collaborativo</h1>
-      <p className="hint">
-        Trascrivi un video in locale con <code>trascrivi video.mp4</code>, importa
-        il <code>transcript.json</code>, apri il video (resta in locale) ed edita in
-        tempo reale. La parola in riproduzione si illumina; clicca una parola per
-        saltare a quel punto del video.
-      </p>
-      <div className="projectbar">
-        <span>
-          Progetto: <strong>{doc}</strong>
-        </span>
-        <button className="btn" onClick={openProject}>Nuovo / cambia progetto</button>
-        <span className="hint">— condividi questo URL per collaborare</span>
-      </div>
+      <input
+        className="project-title"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+        onBlur={commit}
+        placeholder="Nome del progetto"
+        aria-label="Nome del progetto"
+        spellCheck={false}
+      />
       <Editor key={doc} documentName={doc} />
     </main>
   );

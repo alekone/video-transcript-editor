@@ -37,6 +37,37 @@ code { background: var(--panel-2); padding: 0.1em 0.35em; border-radius: 4px; fo
   background: var(--bg);
 }
 .ProseMirror:focus { outline: none; }
+/* Gutter timecode accanto a ogni paragrafo */
+.editor .ProseMirror { padding-left: 3.2rem; }
+.editor .ProseMirror p { position: relative; }
+.tc-gutter {
+  position: absolute;
+  left: -3.2rem;
+  top: 0.25em;
+  width: 2.6rem;
+  text-align: right;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  opacity: 0.55;
+  user-select: none;
+  pointer-events: none;
+}
+
+/* Titolo progetto (campo grande editabile = URL) */
+.project-title {
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font-size: 1.7rem;
+  font-weight: 700;
+  padding: 0.2rem 0;
+  margin: 0 0 0.5rem;
+  border-bottom: 2px solid transparent;
+}
+.project-title:hover { border-bottom-color: var(--border); }
+.project-title:focus { outline: none; border-bottom-color: var(--accent); }
 
 /* Barra progetto */
 .projectbar {

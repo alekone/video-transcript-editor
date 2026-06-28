@@ -11,6 +11,7 @@ import { isElectron, electronAPI } from "./lib/platform";
 import { Timing } from "./extensions/Timing";
 import { Playhead, setPlayheadTime } from "./extensions/Playhead";
 import { Highlight } from "./extensions/Highlight";
+import { Timecodes } from "./extensions/Timecodes";
 import {
   buildEDL,
   buildFCPXML,
@@ -88,7 +89,9 @@ export function Editor({ documentName }: { documentName: string }) {
   const [numSpeakers, setNumSpeakers] = useState("2");
   const [working, setWorking] = useState(false);
   const [progress, setProgress] = useState<{ phase: string; pct: number | null } | null>(null);
-  const [dark, setDark] = useState(() => localStorage.getItem("vte-theme") === "dark");
+  // Dark di default (le buone app creative partono in scuro); "light" solo se scelto.
+  const [dark, setDark] = useState(() => localStorage.getItem("vte-theme") !== "light");
+  const [skipCuts, setSkipCuts] = useState(false); // anteprima montaggio in play
   const [stats, setStats] = useState<Stats | null>(null);
   const [find, setFind] = useState("");
   const [replace, setReplace] = useState("");
@@ -100,6 +103,7 @@ export function Editor({ documentName }: { documentName: string }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const projRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const cutRangesRef = useRef<{ start: number; end: number }[]>([]);
 
   const { ydoc, provider, meta } = useMemo(() => {
     const ydoc = new Y.Doc();
@@ -119,10 +123,21 @@ export function Editor({ documentName }: { documentName: string }) {
     localStorage.setItem("vte-theme", dark ? "dark" : "light");
   }, [dark]);
 
+  // Ripristino automatico: speaker, fps e — su Electron — il video del progetto
+  // (path salvato nel doc persistito). Così riaprendo il progetto torna tutto.
+  const restoredVideo = useRef(false);
   useEffect(() => {
     const read = () => {
       const raw = meta.get("speakers");
       if (raw) setSpeakers(JSON.parse(raw));
+      const f = meta.get("fps");
+      if (f) setFps(Number(f));
+      const vp = meta.get("videoPath");
+      if (vp && isElectron && !restoredVideo.current) {
+        restoredVideo.current = true;
+        setVideoPath(vp);
+        setVideoUrl(electronAPI!.mediaUrl(vp));
+      }
     };
     read();
     meta.observe(read);
@@ -134,6 +149,7 @@ export function Editor({ documentName }: { documentName: string }) {
       StarterKit.configure({ history: false }),
       Timing,
       Highlight,
+      Timecodes,
       Playhead,
       Collaboration.configure({ document: ydoc }),
       ...(provider
@@ -169,7 +185,7 @@ export function Editor({ documentName }: { documentName: string }) {
     if (data.source) meta.set("source", data.source);
     setSpeakers(spks);
     setImported(data.words.length);
-    if (data.fps) setFps(data.fps); // FPS rilevato automaticamente
+    if (data.fps) { setFps(data.fps); meta.set("fps", String(data.fps)); } // FPS rilevato + ricordato
   }
 
   // Salva/apri un file di progetto (.vte.json) con tutti i setting + il testo
@@ -244,6 +260,8 @@ export function Editor({ documentName }: { documentName: string }) {
     if (!path) return;
     setVideoPath(path);
     setVideoUrl(electronAPI!.mediaUrl(path));
+    restoredVideo.current = true;
+    meta.set("videoPath", path); // ricordato col progetto
     // recupero automatico: se questo video è già stato trascritto, ricaricalo
     const cached = await electronAPI!.cachedTranscript(path);
     if (cached && cached.words?.length) {
@@ -274,9 +292,11 @@ export function Editor({ documentName }: { documentName: string }) {
       if (last) setProgress({ phase: last[1], pct: last[2] != null ? Number(last[2]) : null });
     });
     try {
+      const spk = numSpeakers.trim();
       const data = await electronAPI!.transcribe(videoPath, {
         lang: "it",
-        speakers: numSpeakers.trim() || undefined,
+        // speaker=1 → niente diarizzazione (inutile con un solo parlante)
+        speakers: spk && spk !== "1" ? spk : undefined,
         force,
       });
       if (data) importWords(data);
@@ -298,7 +318,17 @@ export function Editor({ documentName }: { documentName: string }) {
   };
 
   function onTimeUpdate() {
-    if (videoRef.current) setPlayheadTime(editor, videoRef.current.currentTime);
+    const v = videoRef.current;
+    if (!v) return;
+    // Anteprima montaggio: salta automaticamente le parti tagliate in play.
+    if (skipCuts && !v.paused) {
+      const cut = cutRangesRef.current.find((c) => v.currentTime >= c.start - 0.05 && v.currentTime < c.end - 0.1);
+      if (cut) {
+        v.currentTime = cut.end;
+        return;
+      }
+    }
+    setPlayheadTime(editor, v.currentTime);
   }
   function onEditorClick(e: React.MouseEvent) {
     const el = (e.target as HTMLElement).closest(".w") as HTMLElement | null;
@@ -434,6 +464,14 @@ export function Editor({ documentName }: { documentName: string }) {
     setPreview({ keep: dur(s.keep), cut: dur(s.cut), segs: s.keep.length, cuts: s.cut.slice(0, 100) });
   }
 
+  // Attiva/disattiva l'anteprima del montaggio in riproduzione (salta i tagli).
+  function toggleSkipCuts() {
+    const next = !skipCuts;
+    if (next) cutRangesRef.current = segments().cut;
+    setSkipCuts(next);
+    flash(next ? "Anteprima montaggio attiva: in play salta i tagli." : "Anteprima montaggio disattivata.");
+  }
+
   if (!editor) return <p>Caricamento editor…</p>;
 
   return (
@@ -504,6 +542,10 @@ export function Editor({ documentName }: { documentName: string }) {
           </label>
           <button className="btn ghost" onClick={autoPause} title="Calcola la soglia analizzando le pause del parlato">auto</button>
           <button className="btn" onClick={previewCuts}>👁 Anteprima tagli</button>
+          <button className={`btn${skipCuts ? " primary" : ""}`} onClick={toggleSkipCuts}
+            title="In riproduzione salta automaticamente le parti tagliate (anteprima del montaggio finale)">
+            ▶ Anteprima in play {skipCuts ? "ON" : "OFF"}
+          </button>
         </div>
       </details>
 
