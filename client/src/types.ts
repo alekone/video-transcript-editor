@@ -14,4 +14,5 @@ export interface TranscriptResult {
   language?: string;
   duration?: number; // secondi
   source?: string; // nome del file video originale
+  fps?: number; // frame rate rilevato (per l'export EDL/FCPXML)
 }

@@ -12,6 +12,8 @@ export interface ElectronAPI {
     videoPath: string,
     opts: { lang?: string; speakers?: string; force?: boolean }
   ) => Promise<(import("../types").TranscriptResult & { cached?: boolean }) | null>;
+  // trascrizione già in cache per questo video (o null)
+  cachedTranscript: (videoPath: string) => Promise<import("../types").TranscriptResult | null>;
   // Salva/carica un progetto (.vte.json) su disco.
   saveProject: (data: unknown, suggestedName: string) => Promise<string | null>;
   loadProject: () => Promise<unknown | null>;

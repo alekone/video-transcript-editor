@@ -199,7 +199,21 @@ ipcMain.handle("transcribe", async (e, videoPath, opts = {}) => {
   const data = JSON.parse(fs.readFileSync(out, "utf8"));
   fs.unlinkSync(out);
   fs.writeFileSync(transcriptCache, JSON.stringify(data)); // salva per riapertura istantanea
+  fs.writeFileSync(path.join(cacheDir, `last-${vidKey}.json`), JSON.stringify(data)); // ultima per questo video
   return data;
+});
+
+// All'apertura di un video: se è già stato trascritto, ritorna la trascrizione
+// in cache (qualunque lingua/speaker), così si recupera automaticamente.
+ipcMain.handle("cached-transcript", async (_e, videoPath) => {
+  try {
+    const st = fs.statSync(videoPath);
+    const vidKey = crypto.createHash("sha1").update(`${videoPath}|${st.size}|${st.mtimeMs}`).digest("hex").slice(0, 16);
+    const f = path.join(app.getPath("userData"), "cache", `last-${vidKey}.json`);
+    return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : null;
+  } catch {
+    return null;
+  }
 });
 
 ipcMain.handle("save-project", async (_e, data, suggestedName) => {

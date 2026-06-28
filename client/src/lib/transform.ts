@@ -19,6 +19,25 @@ export function isFiller(text: string): boolean {
   return FILLER_WORDS.has(normalizeWord(text));
 }
 
+// Soglia "pausa lunga" suggerita: analizza i gap tra parole e propone un
+// valore che isola le pause anomale (mediana dei gap + margine), con un
+// minimo di 0.5s. Così l'utente non deve indovinare il numero.
+export function suggestPauseThreshold(words: TranscriptWord[]): number {
+  const gaps: number[] = [];
+  const sorted = [...words].sort((a, b) => a.start - b.start);
+  for (let i = 1; i < sorted.length; i++) {
+    const g = sorted[i].start - sorted[i - 1].end;
+    if (g > 0) gaps.push(g);
+  }
+  if (gaps.length < 5) return 1;
+  gaps.sort((a, b) => a - b);
+  const median = gaps[Math.floor(gaps.length / 2)];
+  const p90 = gaps[Math.floor(gaps.length * 0.9)];
+  // a metà tra il 90° percentile e una soglia "naturale" sopra la mediana
+  const t = Math.max(0.5, Math.min(p90, median + 0.6));
+  return Math.round(t * 10) / 10;
+}
+
 export interface SpeakerStat {
   speaker: string;
   words: number;

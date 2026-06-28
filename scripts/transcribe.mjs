@@ -96,6 +96,23 @@ function runWhisper(cmd, args) {
   });
 }
 
+// Rileva il frame rate del video con ffprobe (es. "25/1" → 25). null se audio.
+async function detectFps(input) {
+  try {
+    const out = await runCapture("ffprobe", [
+      "-v", "error", "-select_streams", "v:0",
+      "-show_entries", "stream=r_frame_rate",
+      "-of", "default=nw=1:nk=1", input,
+    ]);
+    const m = out.trim().match(/^(\d+)\s*\/\s*(\d+)/);
+    if (!m) return null;
+    const fps = Number(m[1]) / Number(m[2]);
+    return fps > 0 && isFinite(fps) ? Math.round(fps * 1000) / 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
 // ---- diarizzazione (chi parla quando) -----------------------------------
 async function diarize(wav) {
   const py = process.env.VTE_PYTHON || join(ROOT, ".venv", "bin", "python");
@@ -222,12 +239,14 @@ function tokensToWords(full) {
     console.log(`  ${n} speaker assegnati alle parole.`);
   }
 
+  const fps = await detectFps(INPUT);
   const text = words.map((w) => w.text).join(" ");
   const out = {
     text,
     words,
     language: full.result?.language ?? LANG,
     source: basename(INPUT),
+    fps,
   };
   writeFileSync(OUT, JSON.stringify(out, null, 2));
   emitProgress("done", 100);

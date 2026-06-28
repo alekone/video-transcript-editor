@@ -24,12 +24,18 @@ import {
   downloadText,
   segmentsToText,
 } from "./lib/exports";
-import { isFiller, computeStats, type Stats } from "./lib/transform";
+import { isFiller, computeStats, suggestPauseThreshold, type Stats } from "./lib/transform";
 import type { TranscriptResult, TranscriptWord } from "./types";
 
 const COLORS = ["#f783ac", "#4dabf7", "#69db7c", "#ffd43b", "#9775fa", "#ff922b"];
 const randomName = () => `Utente ${Math.floor(Math.random() * 1000)}`;
 const randomColor = () => COLORS[Math.floor(Math.random() * COLORS.length)];
+
+const fmt = (s: number) => {
+  const m = Math.floor(s / 60);
+  const sec = Math.floor(s % 60);
+  return `${m}:${String(sec).padStart(2, "0")}`;
+};
 
 function speakerOrder(words: TranscriptWord[]): string[] {
   const seen: string[] = [];
@@ -41,13 +47,21 @@ function wordsToDoc(words: TranscriptWord[], speakers: string[]) {
   const spkIndex = (s?: string) => (s ? speakers.indexOf(s) % 8 : null);
   const paragraphs: TranscriptWord[][] = [[]];
   let prevSpeaker: string | undefined;
+  let prevEnd: number | null = null;
   for (const w of words) {
-    const cur = paragraphs[paragraphs.length - 1];
+    let cur = paragraphs[paragraphs.length - 1];
     const speakerChanged = w.speaker != null && w.speaker !== prevSpeaker && cur.length > 0;
-    if (speakerChanged) paragraphs.push([w]);
-    else cur.push(w);
+    const longGap = prevEnd != null && w.start - prevEnd > 1.5 && cur.length > 0;
+    if (speakerChanged || longGap) {
+      paragraphs.push([w]);
+      cur = paragraphs[paragraphs.length - 1];
+    } else {
+      cur.push(w);
+    }
     if (w.speaker) prevSpeaker = w.speaker;
-    if (/[.!?…]$/.test(w.text) && !w.speaker) paragraphs.push([]);
+    prevEnd = w.end;
+    // fine frase → nuovo paragrafo se quello attuale è già corposo (testo leggibile)
+    if (/[.!?…]$/.test(w.text) && cur.length >= 12) paragraphs.push([]);
   }
   const content = paragraphs
     .filter((p) => p.length > 0)
@@ -80,7 +94,11 @@ export function Editor({ documentName }: { documentName: string }) {
   const [replace, setReplace] = useState("");
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameVal, setRenameVal] = useState("");
+  const [preview, setPreview] = useState<{
+    keep: number; cut: number; segs: number; cuts: { start: number; end: number; text: string }[];
+  } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const projRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
   const { ydoc, provider, meta } = useMemo(() => {
@@ -151,6 +169,61 @@ export function Editor({ documentName }: { documentName: string }) {
     if (data.source) meta.set("source", data.source);
     setSpeakers(spks);
     setImported(data.words.length);
+    if (data.fps) setFps(data.fps); // FPS rilevato automaticamente
+  }
+
+  // Salva/apri un file di progetto (.vte.json) con tutti i setting + il testo
+  // editato (incluse evidenziazioni). Funziona sia su web sia su Electron.
+  function saveProject() {
+    if (!editor) return;
+    const project = {
+      version: 1,
+      video: videoPath,
+      fps,
+      numSpeakers,
+      maxGap,
+      originalWords: JSON.parse(meta.get("originalWords") || "[]"),
+      speakers: JSON.parse(meta.get("speakers") || "[]"),
+      source: meta.get("source") || null,
+      html: editor.getHTML(),
+    };
+    downloadText(`${documentName}.vte.json`, JSON.stringify(project));
+    flash("Progetto salvato.");
+  }
+  async function loadProject(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !editor) return;
+    setError(null);
+    try {
+      const p = JSON.parse(await file.text());
+      setFps(p.fps || 25);
+      setNumSpeakers(String(p.numSpeakers ?? "2"));
+      setMaxGap(p.maxGap || 0);
+      meta.set("originalWords", JSON.stringify(p.originalWords || []));
+      meta.set("speakers", JSON.stringify(p.speakers || []));
+      if (p.source) meta.set("source", p.source);
+      editor.commands.setContent(p.html || "<p></p>");
+      setSpeakers(p.speakers || []);
+      setImported((p.originalWords || []).length);
+      if (p.video && isElectron) {
+        setVideoPath(p.video);
+        setVideoUrl(electronAPI!.mediaUrl(p.video));
+      }
+      flash("Progetto caricato.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (projRef.current) projRef.current.value = "";
+    }
+  }
+
+  function autoPause() {
+    const raw = meta.get("originalWords");
+    const words: TranscriptWord[] = raw ? JSON.parse(raw) : [];
+    if (!words.length) return flash("Trascrivi prima un video.");
+    const t = suggestPauseThreshold(words);
+    setMaxGap(t);
+    flash(`Soglia pause impostata a ${t}s (calcolata dai gap).`);
   }
 
   async function onImport(e: React.ChangeEvent<HTMLInputElement>) {
@@ -171,6 +244,12 @@ export function Editor({ documentName }: { documentName: string }) {
     if (!path) return;
     setVideoPath(path);
     setVideoUrl(electronAPI!.mediaUrl(path));
+    // recupero automatico: se questo video è già stato trascritto, ricaricalo
+    const cached = await electronAPI!.cachedTranscript(path);
+    if (cached && cached.words?.length) {
+      importWords(cached);
+      flash("Trascrizione recuperata dalla cache di questo video.");
+    }
   }
   function onPickVideo(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -345,73 +424,109 @@ export function Editor({ documentName }: { documentName: string }) {
     if (videoRef.current) videoRef.current.playbackRate = v;
   }
 
+  // Anteprima del montaggio: quanto resta, quanto si taglia (incluse le pause
+  // se "taglia pause" è attivo) e l'elenco dei tagli con timecode.
+  function previewCuts() {
+    const s = segments();
+    if (!s.hasOriginal) return flash("Trascrivi/importa prima un transcript.");
+    const dur = (segs: { start: number; end: number }[]) =>
+      segs.reduce((a, x) => a + (x.end - x.start), 0);
+    setPreview({ keep: dur(s.keep), cut: dur(s.cut), segs: s.keep.length, cuts: s.cut.slice(0, 100) });
+  }
+
   if (!editor) return <p>Caricamento editor…</p>;
 
   return (
     <div>
+      {/* Barra principale — solo l'essenziale */}
       <div className="toolbar">
         {isElectron ? (
-          <button className="btn" onClick={openVideoNative}>Apri video</button>
+          <button className="btn primary" onClick={openVideoNative}>🎬 Apri video</button>
         ) : (
           <label className="upload">
             <input type="file" accept="video/*,audio/*" onChange={onPickVideo} />
-            Apri video
+            🎬 Apri video
           </label>
         )}
         {isElectron && (
           <>
             <label className="field">speaker
-              <input type="text" value={numSpeakers} onChange={(e) => setNumSpeakers(e.target.value)} placeholder="2/auto" size={5} />
+              <input type="text" value={numSpeakers} onChange={(e) => setNumSpeakers(e.target.value)} placeholder="2/auto" size={4} />
             </label>
-            <button className="btn" onClick={() => transcribeNative(false)} disabled={working}>Trascrivi</button>
-            <button className="btn" onClick={() => transcribeNative(true)} disabled={working || !videoPath} title="Rifà da capo (riusa l'audio)">↻ da capo</button>
+            <button className="btn primary" onClick={() => transcribeNative(false)} disabled={working}>Trascrivi</button>
+            <button className="btn ghost" onClick={() => transcribeNative(true)} disabled={working || !videoPath} title="Rifà da capo (riusa l'audio)">↻</button>
           </>
         )}
-        <label className="upload">
-          <input ref={fileRef} type="file" accept="application/json,.json" onChange={onImport} />
-          Importa transcript
+        <span className="spacer" />
+        <button className="btn ghost" onClick={saveProject} title="Salva tutto (testo, edit, setting) in un file .vte.json">Salva progetto</button>
+        <label className="upload sm">
+          <input ref={projRef} type="file" accept=".json,application/json" onChange={loadProject} />
+          Apri progetto
         </label>
         <button className="btn ghost" onClick={() => setDark((d) => !d)} title="Tema chiaro/scuro">{dark ? "☀︎" : "☾"}</button>
       </div>
 
-      {/* Strumenti */}
-      <div className="toolbar tools">
-        <button className="btn" onClick={removeFillers}>✂︎ Rimuovi filler</button>
-        <button className="btn" onClick={() => editor.chain().focus().toggleMark("highlight").run()}>★ Evidenzia</button>
-        <button className="btn" onClick={showStats}>📊 Statistiche</button>
-        <label className="field">velocità
-          <select onChange={(e) => setSpeed(Number(e.target.value))} defaultValue="1">
-            {[0.5, 0.75, 1, 1.25, 1.5, 2].map((v) => <option key={v} value={v}>{v}×</option>)}
-          </select>
-        </label>
-        <label className="field">taglia pause &gt;
-          <input type="number" min={0} step={0.5} value={maxGap} onChange={(e) => setMaxGap(Number(e.target.value) || 0)} /> s
-        </label>
-      </div>
+      {/* Strumenti di editing — a scomparsa */}
+      <details className="section">
+        <summary>✏️ Strumenti di editing</summary>
+        <div className="toolbar tools">
+          <button className="btn" onClick={removeFillers}>✂︎ Rimuovi filler</button>
+          <button className="btn" onClick={() => editor.chain().focus().toggleMark("highlight").run()}
+            title="Seleziona del testo e clicca per evidenziare. Per togliere: ri-seleziona la parte evidenziata e ri-clicca.">★ Evidenzia / togli</button>
+          <button className="btn" onClick={showStats}>📊 Statistiche</button>
+          <label className="field">velocità
+            <select onChange={(e) => setSpeed(Number(e.target.value))} defaultValue="1">
+              {[0.5, 0.75, 1, 1.25, 1.5, 2].map((v) => <option key={v} value={v}>{v}×</option>)}
+            </select>
+          </label>
+        </div>
+        <div className="toolbar tools">
+          <input className="find" placeholder="Cerca…" value={find} onChange={(e) => setFind(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && doFind()} />
+          <button className="btn ghost" onClick={doFind}>Trova</button>
+          <input className="find" placeholder="Sostituisci con…" value={replace} onChange={(e) => setReplace(e.target.value)} />
+          <button className="btn ghost" onClick={doReplaceAll}>Sostituisci tutto</button>
+        </div>
+        <div className="toolbar tools">
+          <label className="upload sm">
+            <input ref={fileRef} type="file" accept="application/json,.json" onChange={onImport} />
+            Importa transcript.json
+          </label>
+        </div>
+      </details>
 
-      {/* Cerca e sostituisci */}
-      <div className="toolbar tools">
-        <input className="find" placeholder="Cerca…" value={find} onChange={(e) => setFind(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && doFind()} />
-        <button className="btn ghost" onClick={doFind}>Trova</button>
-        <input className="find" placeholder="Sostituisci con…" value={replace} onChange={(e) => setReplace(e.target.value)} />
-        <button className="btn ghost" onClick={doReplaceAll}>Sostituisci tutto</button>
-      </div>
+      {/* Tagli & montaggio — a scomparsa */}
+      <details className="section">
+        <summary>✂️ Tagli & anteprima montaggio</summary>
+        <div className="toolbar tools">
+          <label className="field">taglia pause &gt;
+            <input type="number" min={0} step={0.5} value={maxGap} onChange={(e) => setMaxGap(Number(e.target.value) || 0)} /> s
+          </label>
+          <button className="btn ghost" onClick={autoPause} title="Calcola la soglia analizzando le pause del parlato">auto</button>
+          <button className="btn" onClick={previewCuts}>👁 Anteprima tagli</button>
+        </div>
+      </details>
 
-      {/* Export */}
-      <div className="toolbar export">
-        <span className="group-label">Esporta:</span>
-        <label className="field">fps<input type="number" value={fps} onChange={(e) => setFps(Number(e.target.value) || 25)} /></label>
-        <button className="btn" onClick={exp.edl}>EDL</button>
-        <button className="btn" onClick={exp.fcpxml}>FCPXML</button>
-        <button className="btn" onClick={exp.srt}>SRT</button>
-        <button className="btn" onClick={exp.vtt}>VTT</button>
-        <button className="btn" onClick={exp.txt}>TXT</button>
-        <button className="btn" onClick={exp.md}>MD</button>
-        <button className="btn" onClick={exp.highlights}>★ Highlights</button>
-        <button className="btn ghost" onClick={exp.keep}>tenuti</button>
-        <button className="btn ghost" onClick={exp.cut}>tagli</button>
-      </div>
+      {/* Export — a scomparsa */}
+      <details className="section">
+        <summary>⬇️ Esporta</summary>
+        <div className="toolbar export">
+          <label className="field">fps<input type="number" value={fps} onChange={(e) => setFps(Number(e.target.value) || 25)} /></label>
+          <span className="group-label">montaggio:</span>
+          <button className="btn" onClick={exp.edl}>EDL</button>
+          <button className="btn" onClick={exp.fcpxml}>FCPXML</button>
+          <span className="group-label">sottotitoli:</span>
+          <button className="btn" onClick={exp.srt}>SRT</button>
+          <button className="btn" onClick={exp.vtt}>VTT</button>
+          <span className="group-label">testo:</span>
+          <button className="btn" onClick={exp.txt}>TXT</button>
+          <button className="btn" onClick={exp.md}>MD</button>
+          <span className="group-label">altro:</span>
+          <button className="btn" onClick={exp.highlights}>★ Highlights</button>
+          <button className="btn ghost" onClick={exp.keep}>tenuti</button>
+          <button className="btn ghost" onClick={exp.cut}>tagli</button>
+        </div>
+      </details>
 
       <div className="status">
         {imported != null && !working && <span className="ok">✓ {imported} parole</span>}
@@ -475,6 +590,26 @@ export function Editor({ documentName }: { documentName: string }) {
               <span>{Math.round(s.pct)}% · {s.words} parole</span>
             </div>
           ))}
+        </div>
+      )}
+
+      {preview && (
+        <div className="stats">
+          <div className="stats-head">
+            <strong>Anteprima montaggio</strong> · ✅ tieni {Math.round(preview.keep / 60)} min ({preview.segs} segmenti) ·
+            ✂︎ tagli {Math.round(preview.cut / 60)} min
+            <button className="btn ghost" onClick={() => setPreview(null)}>✕</button>
+          </div>
+          <div className="cuts-list">
+            {preview.cuts.length === 0 && <div className="hint">Nessun taglio: imposta "taglia pause" o cancella del testo.</div>}
+            {preview.cuts.map((c, i) => (
+              <div key={i} className="cut-row" title="Clicca per saltare qui nel video"
+                onClick={() => { if (videoRef.current) { videoRef.current.currentTime = c.start; videoRef.current.play(); } }}>
+                <span className="cut-tc">✂︎ {fmt(c.start)} → {fmt(c.end)}</span>
+                <span className="cut-text">{c.text.slice(0, 80)}</span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

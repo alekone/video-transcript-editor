@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   transcribe: (videoPath, opts) => ipcRenderer.invoke("transcribe", videoPath, opts),
 
+  cachedTranscript: (videoPath) => ipcRenderer.invoke("cached-transcript", videoPath),
+
   saveProject: (data, suggestedName) => ipcRenderer.invoke("save-project", data, suggestedName),
   loadProject: () => ipcRenderer.invoke("load-project"),
 
