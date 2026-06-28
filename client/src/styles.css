@@ -80,6 +80,15 @@ code {
   font-size: 0.9rem;
 }
 .btn:hover { background: #f1f3f5; border-color: #aaa; }
+.btn:disabled { opacity: 0.5; cursor: default; }
+.field {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  color: #555;
+}
+.field input { width: 4rem; font-size: 0.85rem; padding: 0.2rem 0.3rem; }
 
 /* Parole con timecode (mark `timing`) */
 .editor .w { border-bottom: 1px dotted #ccc; cursor: pointer; }

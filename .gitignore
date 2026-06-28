@@ -12,3 +12,5 @@ dist/
 models/
 transcript.json
 .venv/
+dist-electron/
+release/

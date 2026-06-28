@@ -16,13 +16,19 @@
     "dev:server": "npm run dev --workspace=server",
     "start:server": "npm run start --workspace=server",
     "build:client": "npm run build --workspace=client",
-    "transcribe": "node scripts/transcribe.mjs"
+    "transcribe": "node scripts/transcribe.mjs",
+    "app": "electron electron/main.cjs",
+    "app:dev": "npm run dev:client & (until curl -sf http://localhost:5173/v-editor/ >/dev/null; do sleep 0.5; done; electron electron/main.cjs)"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0"
   },
   "allowScripts": {
     "esbuild@0.28.1": true,
     "esbuild@0.21.5": true,
     "sqlite3@5.1.7": true,
     "workerd@1.20240718.0": true,
-    "fsevents@2.3.3": true
+    "fsevents@2.3.3": true,
+    "electron@33.4.11": true
   }
 }

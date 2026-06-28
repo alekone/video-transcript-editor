@@ -7,6 +7,7 @@ import { HocuspocusProvider } from "@hocuspocus/provider";
 import { IndexeddbPersistence } from "y-indexeddb";
 import * as Y from "yjs";
 import { REALTIME_URL } from "./lib/realtime";
+import { isElectron, electronAPI } from "./lib/platform";
 import { Timing } from "./extensions/Timing";
 import { Playhead, setPlayheadTime } from "./extensions/Playhead";
 import {
@@ -35,8 +36,7 @@ function speakerOrder(words: TranscriptWord[]): string[] {
 // parola è testo con il mark `timing`. Nuovo paragrafo al cambio di speaker
 // (o sulla punteggiatura forte) e colore per speaker.
 function wordsToDoc(words: TranscriptWord[], speakers: string[]) {
-  const spkIndex = (s?: string) =>
-    s ? speakers.indexOf(s) % 8 : null;
+  const spkIndex = (s?: string) => (s ? speakers.indexOf(s) % 8 : null);
 
   const paragraphs: TranscriptWord[][] = [[]];
   let prevSpeaker: string | undefined;
@@ -75,31 +75,28 @@ export function Editor({ documentName }: { documentName: string }) {
   const [imported, setImported] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [videoPath, setVideoPath] = useState<string | null>(null); // solo Electron
   const [speakers, setSpeakers] = useState<string[]>([]);
+  const [fps, setFps] = useState(25);
+  const [numSpeakers, setNumSpeakers] = useState("2");
+  const [working, setWorking] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
-  // ydoc + sync col server (Render) + persistenza locale (IndexedDB).
-  // La copia locale fa sopravvivere gli edit anche se il server si riavvia:
-  // alla riconnessione il client ri-sincronizza il documento.
+  // ydoc + persistenza locale (IndexedDB). Nel web: anche sync col server
+  // (Render). In Electron: solo locale, niente server.
   const { ydoc, provider, meta } = useMemo(() => {
     const ydoc = new Y.Doc();
     new IndexeddbPersistence(`v-editor:${documentName}`, ydoc);
-    const provider = new HocuspocusProvider({
-      url: REALTIME_URL,
-      name: documentName,
-      document: ydoc,
-    });
-    // Conserviamo il transcript originale nel doc condiviso: serve per
-    // calcolare le PARTI TAGLIATE (originale − sopravvissuto).
+    const provider = isElectron
+      ? null
+      : new HocuspocusProvider({ url: REALTIME_URL, name: documentName, document: ydoc });
     const meta = ydoc.getMap<string>("meta");
     return { ydoc, provider, meta };
   }, [documentName]);
 
-  useEffect(() => () => provider.destroy(), [provider]);
+  useEffect(() => () => provider?.destroy(), [provider]);
 
-  // Legenda speaker: leggi da meta e tieniti aggiornato (anche per chi si
-  // unisce a un documento già diarizzato senza re-importare).
   useEffect(() => {
     const read = () => {
       const raw = meta.get("speakers");
@@ -116,27 +113,37 @@ export function Editor({ documentName }: { documentName: string }) {
       Timing,
       Playhead,
       Collaboration.configure({ document: ydoc }),
-      CollaborationCursor.configure({
-        provider,
-        user: { name: randomName(), color: randomColor() },
-      }),
+      // Cursori dei collaboratori solo nel web (serve un provider).
+      ...(provider
+        ? [
+            CollaborationCursor.configure({
+              provider,
+              user: { name: randomName(), color: randomColor() },
+            }),
+          ]
+        : []),
     ],
   });
 
+  // Carica un transcript (da file o da trascrizione) nel documento.
+  function importWords(data: TranscriptResult) {
+    if (!editor) return;
+    if (!Array.isArray(data.words)) throw new Error("transcript senza campo 'words'");
+    const spks = speakerOrder(data.words);
+    editor.commands.setContent(wordsToDoc(data.words, spks));
+    meta.set("originalWords", JSON.stringify(data.words));
+    meta.set("speakers", JSON.stringify(spks));
+    if (data.source) meta.set("source", data.source);
+    setSpeakers(spks);
+    setImported(data.words.length);
+  }
+
   async function onImport(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
-    if (!file || !editor) return;
+    if (!file) return;
     setError(null);
     try {
-      const data = JSON.parse(await file.text()) as TranscriptResult;
-      if (!Array.isArray(data.words)) throw new Error("transcript.json senza campo 'words'");
-      const spks = speakerOrder(data.words);
-      editor.commands.setContent(wordsToDoc(data.words, spks));
-      meta.set("originalWords", JSON.stringify(data.words));
-      meta.set("speakers", JSON.stringify(spks));
-      if (data.source) meta.set("source", data.source);
-      setSpeakers(spks);
-      setImported(data.words.length);
+      importWords(JSON.parse(await file.text()) as TranscriptResult);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -144,25 +151,50 @@ export function Editor({ documentName }: { documentName: string }) {
     }
   }
 
-  // Il video resta in locale: object URL, nessun upload (regge file da 10+ GB).
+  // Apertura video: nativa in Electron (path persistente), file-picker nel web.
+  async function openVideoNative() {
+    const path = await electronAPI!.openVideo();
+    if (!path) return;
+    setVideoPath(path);
+    setVideoUrl(electronAPI!.mediaUrl(path));
+  }
   function onPickVideo(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
     setVideoUrl((prev) => {
-      if (prev) URL.revokeObjectURL(prev);
+      if (prev?.startsWith("blob:")) URL.revokeObjectURL(prev);
       return URL.createObjectURL(file);
     });
   }
   useEffect(() => () => {
-    if (videoUrl) URL.revokeObjectURL(videoUrl);
+    if (videoUrl?.startsWith("blob:")) URL.revokeObjectURL(videoUrl);
   }, [videoUrl]);
 
-  // Riproduzione → evidenzia la parola corrente.
+  // Trascrizione integrata (solo Electron): lancia la pipeline locale.
+  async function transcribeNative() {
+    if (!videoPath) {
+      setError("Apri prima un video.");
+      return;
+    }
+    setError(null);
+    setWorking("Trascrizione in corso… (può richiedere qualche minuto)");
+    try {
+      const data = await electronAPI!.transcribe(videoPath, {
+        lang: "it",
+        speakers: numSpeakers.trim() || undefined,
+      });
+      importWords(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setWorking(null);
+    }
+  }
+
   function onTimeUpdate() {
     if (videoRef.current) setPlayheadTime(editor, videoRef.current.currentTime);
   }
 
-  // Click su una parola → salta a quel punto del video.
   function onEditorClick(e: React.MouseEvent) {
     const el = (e.target as HTMLElement).closest(".w") as HTMLElement | null;
     const start = el?.dataset.start;
@@ -193,7 +225,7 @@ export function Editor({ documentName }: { documentName: string }) {
     const seg = getSegments();
     if (!seg) return;
     if (!seg.hasOriginal) {
-      setError("Per esportare i tagli devi prima importare il transcript.json originale.");
+      setError("Per esportare i tagli devi prima importare/trascrivere il transcript.");
       return;
     }
     downloadText(
@@ -205,9 +237,6 @@ export function Editor({ documentName }: { documentName: string }) {
   function exportEDL() {
     const seg = getSegments();
     if (!seg) return;
-    const fpsRaw = prompt("Frame rate del video (fps)?", "25");
-    if (fpsRaw == null) return;
-    const fps = Number(fpsRaw) || 25;
     const source = (meta.get("source") as string) || "video.mp4";
     downloadText(
       `${documentName}.edl`,
@@ -220,18 +249,53 @@ export function Editor({ documentName }: { documentName: string }) {
   return (
     <div>
       <div className="toolbar">
+        {isElectron ? (
+          <button className="btn" onClick={openVideoNative}>Apri video</button>
+        ) : (
+          <label className="upload">
+            <input type="file" accept="video/*,audio/*" onChange={onPickVideo} />
+            Apri video
+          </label>
+        )}
+
+        {isElectron && (
+          <>
+            <label className="field">
+              speaker
+              <input
+                type="text"
+                value={numSpeakers}
+                onChange={(e) => setNumSpeakers(e.target.value)}
+                placeholder="2 / auto / vuoto"
+                size={6}
+              />
+            </label>
+            <button className="btn" onClick={transcribeNative} disabled={!!working}>
+              Trascrivi
+            </button>
+          </>
+        )}
+
         <label className="upload">
           <input ref={fileRef} type="file" accept="application/json,.json" onChange={onImport} />
           Importa transcript.json
         </label>
-        <label className="upload">
-          <input type="file" accept="video/*,audio/*" onChange={onPickVideo} />
-          Apri video
-        </label>
+
         <button className="btn" onClick={exportKeep}>Esporta tenuti</button>
-        <button className="btn" onClick={exportCut}>Esporta tagli (montatore)</button>
+        <button className="btn" onClick={exportCut}>Esporta tagli</button>
+        <label className="field">
+          fps
+          <input
+            type="number"
+            value={fps}
+            onChange={(e) => setFps(Number(e.target.value) || 25)}
+            size={3}
+          />
+        </label>
         <button className="btn" onClick={exportEDL}>Esporta EDL (DaVinci)</button>
-        {imported != null && <span className="ok">✓ {imported} parole importate</span>}
+
+        {working && <span className="ok">{working}</span>}
+        {imported != null && !working && <span className="ok">✓ {imported} parole</span>}
         {error && <span className="err">⚠ {error}</span>}
       </div>
 
