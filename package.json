@@ -48,7 +48,8 @@
       "category": "public.app-category.video",
       "icon": "build/icon.icns",
       "identity": null
-    }
+    },
+    "afterPack": "build/adhoc-sign.cjs"
   },
   "allowScripts": {
     "esbuild@0.28.1": true,
