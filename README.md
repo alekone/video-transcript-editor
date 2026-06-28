@@ -60,7 +60,21 @@ npm run dev:client
 
 Apri `http://localhost:5173/v-editor/` in due tab per vedere la collaborazione in tempo reale.
 
-## Deploy
+## App Mac (Electron)
+
+Stessa app, ma desktop: trascrizione integrata (bottone "Trascrivi"), apertura
+video nativa, **nessun server** (solo locale, niente collaborazione). Il web resta
+in parallelo. Lo stesso codice React serve entrambi (rileva `window.electronAPI`).
+
+```bash
+npm run app:dev   # avvia Vite + Electron insieme
+# (se electron non parte: node node_modules/electron/install.js)
+```
+
+Nell'app: **Apri video** → **Trascrivi** (whisper.cpp + diarizzazione, n. speaker
+nel campo) → edita → **Esporta EDL**. Packaging `.app`/`.dmg` = TODO fase 2.
+
+## Deploy (web)
 
 Il **backend realtime** si deploya da GitHub su **Render** (Blueprint `render.yaml`):
 collega il repo su render.com → Blueprint → Apply. Ogni push rideploya il server e
