@@ -32,7 +32,12 @@ Esiste in due forme dallo **stesso codice**:
 ## ⬇️ Download (Mac)
 
 Scarica l'ultima `.dmg` dalla pagina **[Releases](../../releases)**, trascina l'app in
-Applicazioni. Al primo avvio: **tasto destro → Apri** (app non notarizzata).
+Applicazioni. Al primo avvio: **tasto destro → Apri** (app firmata ad-hoc, non
+notarizzata). Se compare "è danneggiata", togli la quarantena una volta:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/v-editor.app
+```
 
 Prerequisiti per la trascrizione: `brew install ffmpeg whisper-cpp` e `python3`.
 
