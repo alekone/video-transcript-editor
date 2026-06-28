@@ -14,3 +14,4 @@ transcript.json
 .venv/
 dist-electron/
 release/
+build/*.iconset

@@ -2,6 +2,9 @@
   "name": "video-transcript-editor",
   "version": "0.1.0",
   "private": true,
+  "description": "Editor di trascrizioni per content creator: trascrivi in locale, edita il testo e monta in DaVinci/Premiere/FCP.",
+  "author": "Flatmates",
+  "license": "MIT",
   "type": "module",
   "main": "electron/main.cjs",
   "workspaces": [
@@ -43,6 +46,7 @@
     "mac": {
       "target": "dmg",
       "category": "public.app-category.video",
+      "icon": "build/icon.icns",
       "identity": null
     }
   },
