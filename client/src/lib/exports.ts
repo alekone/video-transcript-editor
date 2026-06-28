@@ -19,11 +19,30 @@ export function collectKeptWords(editor: Editor): TranscriptWord[] {
     if (!node.isText) return;
     const mark = node.marks.find((m) => m.type.name === "timing");
     if (!mark) return;
-    const { start, end } = mark.attrs as { start: number | null; end: number | null };
+    const { start, end, speaker } = mark.attrs as {
+      start: number | null;
+      end: number | null;
+      speaker: string | null;
+    };
     if (start == null || end == null) return;
-    kept.push({ text: (node.text ?? "").trim(), start, end });
+    kept.push({ text: (node.text ?? "").trim(), start, end, speaker: speaker ?? undefined });
   });
   return kept;
+}
+
+// Parole con il mark `highlight` (per la highlights reel).
+export function collectHighlightedWords(editor: Editor): TranscriptWord[] {
+  const out: TranscriptWord[] = [];
+  editor.state.doc.descendants((node) => {
+    if (!node.isText) return;
+    const timing = node.marks.find((m) => m.type.name === "timing");
+    const hl = node.marks.find((m) => m.type.name === "highlight");
+    if (!timing || !hl) return;
+    const { start, end, speaker } = timing.attrs as any;
+    if (start == null || end == null) return;
+    out.push({ text: (node.text ?? "").trim(), start, end, speaker: speaker ?? undefined });
+  });
+  return out;
 }
 
 export interface Segment {
@@ -37,8 +56,12 @@ export interface Segment {
 // le liste in ordine cronologico.
 export function buildSegments(
   originalWords: TranscriptWord[],
-  keptWords: TranscriptWord[]
+  keptWords: TranscriptWord[],
+  opts: { maxGap?: number } = {}
 ): { keep: Segment[]; cut: Segment[] } {
+  // maxGap: se due parole tenute consecutive distano più di tot secondi, si
+  // spezza il segmento → la pausa viene esclusa dal montaggio (taglio pause).
+  const maxGap = opts.maxGap ?? Infinity;
   const keptKeys = new Set(keptWords.map((w) => `${w.start}-${w.end}`));
   const sorted = [...originalWords].sort((a, b) => a.start - b.start);
 
@@ -46,6 +69,7 @@ export function buildSegments(
   const cut: Segment[] = [];
   let cur: Segment | null = null;
   let curKept: boolean | null = null;
+  let prevEnd = 0;
 
   const flush = () => {
     if (cur && curKept != null) (curKept ? keep : cut).push(cur);
@@ -54,7 +78,8 @@ export function buildSegments(
 
   for (const w of sorted) {
     const isKept = keptKeys.has(`${w.start}-${w.end}`);
-    if (curKept !== isKept) {
+    const longPause = isKept && curKept === true && w.start - prevEnd > maxGap;
+    if (curKept !== isKept || longPause) {
       flush();
       curKept = isKept;
       cur = { start: w.start, end: w.end, text: w.text };
@@ -62,6 +87,7 @@ export function buildSegments(
       cur.end = w.end;
       cur.text += " " + w.text;
     }
+    prevEnd = w.end;
   }
   flush();
   return { keep, cut };
@@ -120,6 +146,130 @@ export function buildEDL(
     rec += dur;
   });
   return lines.join("\n") + "\n";
+}
+
+// --- Sottotitoli (SRT / VTT) -------------------------------------------
+export interface Cue {
+  start: number;
+  end: number;
+  text: string;
+}
+
+// Raggruppa le parole in battute leggibili: max ~42 caratteri o 8 parole,
+// si chiude su punteggiatura forte, cambio speaker o pausa > 0.8s.
+export function buildCues(words: TranscriptWord[]): Cue[] {
+  const cues: Cue[] = [];
+  let cur: { words: TranscriptWord[] } | null = null;
+  const flush = () => {
+    if (cur && cur.words.length) {
+      cues.push({
+        start: cur.words[0].start,
+        end: cur.words[cur.words.length - 1].end,
+        text: cur.words.map((w) => w.text).join(" "),
+      });
+    }
+    cur = null;
+  };
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    if (!cur) cur = { words: [] };
+    const prev = cur.words[cur.words.length - 1];
+    const gap = prev ? w.start - prev.end : 0;
+    const len = cur.words.reduce((a, x) => a + x.text.length + 1, 0);
+    const speakerChanged = prev && w.speaker !== prev.speaker;
+    if (cur.words.length && (len > 42 || cur.words.length >= 8 || gap > 0.8 || speakerChanged)) {
+      flush();
+      cur = { words: [] };
+    }
+    cur.words.push(w);
+    if (/[.!?…]$/.test(w.text)) flush();
+  }
+  flush();
+  return cues;
+}
+
+const srtTc = (s: number) => formatTc(s).replace(".", ",");
+
+export function cuesToSRT(cues: Cue[]): string {
+  return (
+    cues
+      .map((c, i) => `${i + 1}\n${srtTc(c.start)} --> ${srtTc(c.end)}\n${c.text}`)
+      .join("\n\n") + "\n"
+  );
+}
+
+export function cuesToVTT(cues: Cue[]): string {
+  return (
+    "WEBVTT\n\n" +
+    cues.map((c) => `${formatTc(c.start)} --> ${formatTc(c.end)}\n${c.text}`).join("\n\n") +
+    "\n"
+  );
+}
+
+// --- Testo semplice / Markdown -----------------------------------------
+// Raggruppa per turni di speaker.
+export function wordsToPlainText(words: TranscriptWord[], markdown = false): string {
+  const lines: string[] = [];
+  let speaker: string | undefined;
+  let buf: string[] = [];
+  const flush = () => {
+    if (!buf.length) return;
+    const text = buf.join(" ");
+    if (speaker) lines.push(markdown ? `**${speaker}:** ${text}` : `${speaker}: ${text}`);
+    else lines.push(text);
+    buf = [];
+  };
+  for (const w of words) {
+    if (w.speaker !== speaker && buf.length) flush();
+    speaker = w.speaker;
+    buf.push(w.text);
+  }
+  flush();
+  return lines.join("\n\n") + "\n";
+}
+
+// --- FCPXML (timeline multi-traccia per Resolve/Premiere/FCP) ----------
+// Rational time a frame: N/<fps>s. Un asset-clip per segmento tenuto.
+export function buildFCPXML(
+  keep: Segment[],
+  opts: { fps?: number; source?: string; title?: string } = {}
+): string {
+  const fps = opts.fps ?? 25;
+  const src = opts.source ?? "video.mp4";
+  const title = opts.title ?? "v-editor";
+  const t = (sec: number) => `${Math.round(sec * fps)}/${fps}s`;
+  const totalDur = keep.reduce((a, s) => a + (s.end - s.start), 0);
+  let offset = 0;
+  const clips = keep
+    .map((s) => {
+      const dur = s.end - s.start;
+      const c = `        <asset-clip ref="r2" offset="${t(offset)}" name="${src}" start="${t(s.start)}" duration="${t(dur)}"/>`;
+      offset += dur;
+      return c;
+    })
+    .join("\n");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE fcpxml>
+<fcpxml version="1.10">
+  <resources>
+    <format id="r1" name="FFVideoFormat" frameDuration="1/${fps}s"/>
+    <asset id="r2" name="${src}" hasVideo="1" hasAudio="1" format="r1">
+      <media-rep kind="original-media" src="${src}"/>
+    </asset>
+  </resources>
+  <library>
+    <event name="${title}">
+      <project name="${title}">
+        <sequence format="r1" duration="${t(totalDur)}">
+          <spine>
+${clips}
+          </spine>
+        </sequence>
+      </project>
+    </event>
+  </library>
+</fcpxml>
+`;
 }
 
 export function downloadText(filename: string, content: string) {
