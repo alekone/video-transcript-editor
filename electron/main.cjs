@@ -4,6 +4,7 @@ const { pathToFileURL } = require("node:url");
 const path = require("node:path");
 const os = require("node:os");
 const fs = require("node:fs");
+const crypto = require("node:crypto");
 
 const isDev = !app.isPackaged;
 const ROOT = path.join(__dirname, "..");
@@ -103,16 +104,32 @@ function ensureDiarVenv(python, onLog) {
 
 ipcMain.handle("transcribe", async (e, videoPath, opts = {}) => {
   const eng = enginePaths();
-  const out = path.join(os.tmpdir(), `vte-${Date.now()}.json`);
   const send = (d) => e.sender.send("transcribe-progress", d.toString());
   const wantSpeakers = !!(opts.speakers || "").trim();
+  const force = !!opts.force;
 
-  // diarizzazione: assicura il venv (nel bundle lo crea in userData)
+  // Cache per-video: il transcript dipende anche da lingua/speaker; l'audio
+  // estratto no (riusabile anche quando si "ricomincia da capo").
+  const st = fs.statSync(videoPath);
+  const vidKey = crypto.createHash("sha1").update(`${videoPath}|${st.size}|${st.mtimeMs}`).digest("hex").slice(0, 16);
+  const tKey = crypto.createHash("sha1").update(`${vidKey}|${opts.lang || "it"}|${opts.speakers || ""}`).digest("hex").slice(0, 16);
+  const cacheDir = path.join(app.getPath("userData"), "cache");
+  fs.mkdirSync(cacheDir, { recursive: true });
+  const transcriptCache = path.join(cacheDir, `t-${tKey}.json`);
+  const wavCache = path.join(cacheDir, `a-${vidKey}.wav`);
+
+  // Trascrizione già fatta per questo video → ricarica all'istante.
+  if (!force && fs.existsSync(transcriptCache)) {
+    send("[[PROG]] done 100\n");
+    return { ...JSON.parse(fs.readFileSync(transcriptCache, "utf8")), cached: true };
+  }
+
   if (wantSpeakers && !fs.existsSync(eng.venvPython)) {
     const ok = await ensureDiarVenv(eng.venvPython, send);
     if (!ok) send("⚠ Diarizzazione non disponibile, procedo senza speaker.\n");
   }
 
+  const out = path.join(os.tmpdir(), `vte-${Date.now()}.json`);
   const args = [eng.transcribeScript, videoPath, "--lang", opts.lang || "it", "--out", out];
   if (wantSpeakers && fs.existsSync(eng.venvPython)) args.push("--speakers", opts.speakers.trim());
 
@@ -126,6 +143,7 @@ ipcMain.handle("transcribe", async (e, videoPath, opts = {}) => {
         VTE_MODELS_DIR: eng.whisperModels,
         VTE_PYTHON: eng.venvPython,
         VTE_DIARIZE_MODELS: eng.diarizeModels,
+        VTE_WAV_CACHE: wavCache, // riusa l'audio estratto tra un tentativo e l'altro
       },
     });
     p.stdout.on("data", send);
@@ -136,6 +154,7 @@ ipcMain.handle("transcribe", async (e, videoPath, opts = {}) => {
 
   const data = JSON.parse(fs.readFileSync(out, "utf8"));
   fs.unlinkSync(out);
+  fs.writeFileSync(transcriptCache, JSON.stringify(data)); // salva per riapertura istantanea
   return data;
 });
 

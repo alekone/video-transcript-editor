@@ -70,6 +70,32 @@ const runCapture = (cmd, args) =>
     p.on("close", (code) => (code === 0 ? res(out) : rej(new Error(`${cmd} uscito con codice ${code}`))));
   });
 
+// Avanzamento machine-readable per l'app (riga `[[PROG]] <fase> <pct?>`).
+// Le fasi: extract | download | transcribe | diarize | done.
+function emitProgress(phase, pct) {
+  console.log(`[[PROG]] ${phase}${pct != null ? " " + pct : ""}`);
+}
+
+// whisper.cpp con stampa del progresso (-pp): cattura stderr, lo ripassa a
+// video e ne estrae la percentuale per la barra.
+function runWhisper(cmd, args) {
+  return new Promise((res, rej) => {
+    const p = spawn(cmd, args, { stdio: ["ignore", "inherit", "pipe"] });
+    let last = -1;
+    p.stderr.on("data", (d) => {
+      const s = d.toString();
+      process.stderr.write(s);
+      const m = s.match(/progress\s*=\s*(\d+)%/);
+      if (m) {
+        const pct = Number(m[1]);
+        if (pct !== last) { last = pct; emitProgress("transcribe", pct); }
+      }
+    });
+    p.on("error", rej);
+    p.on("close", (code) => (code === 0 ? res() : rej(new Error(`${cmd} uscito con codice ${code}`))));
+  });
+}
+
 // ---- diarizzazione (chi parla quando) -----------------------------------
 async function diarize(wav) {
   const py = process.env.VTE_PYTHON || join(ROOT, ".venv", "bin", "python");
@@ -120,6 +146,7 @@ async function ensureModel() {
   if (existsSync(modelPath)) return modelPath;
   const url = `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-${MODEL}.bin`;
   console.log(`→ Scarico il modello "${MODEL}" (una volta sola)…\n  ${url}`);
+  emitProgress("download");
   await run("curl", ["-L", "--fail", "-o", modelPath, url]);
   return modelPath;
 }
@@ -159,20 +186,28 @@ function tokensToWords(full) {
   const sizeGB = (statSync(INPUT).size / 1e9).toFixed(2);
   console.log(`→ Input: ${basename(INPUT)} (${sizeGB} GB)`);
 
-  const wav = join(tmpdir(), `vte-${Date.now()}.wav`);
-  console.log("→ Estraggo l'audio a 16 kHz mono…");
-  await run("ffmpeg", ["-y", "-i", INPUT, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wav]);
+  // Audio: riusa la cache se presente (VTE_WAV_CACHE), così un riavvio della
+  // trascrizione non riestrae l'audio. Altrimenti file temporaneo.
+  const wav = process.env.VTE_WAV_CACHE || join(tmpdir(), `vte-${Date.now()}.wav`);
+  if (existsSync(wav) && statSync(wav).size > 0) {
+    console.log("→ Audio già estratto, riuso la cache.");
+  } else {
+    console.log("→ Estraggo l'audio a 16 kHz mono…");
+    emitProgress("extract");
+    await run("ffmpeg", ["-y", "-i", INPUT, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wav]);
+  }
 
   const model = await ensureModel();
-  const base = wav.replace(/\.wav$/, "");
+  const base = join(tmpdir(), `vte-out-${Date.now()}`);
   console.log(`→ Trascrivo con whisper.cpp (modello ${MODEL}, lingua ${LANG})…`);
-  await run(whisper, [
+  emitProgress("transcribe", 0);
+  await runWhisper(whisper, [
     "-m", model,
     "-f", wav,
     "-l", LANG,
-    "-ojf",            // JSON full: include i token con offset
+    "-ojf",  // JSON full: include i token con offset
     "-of", base,
-    "-np",             // niente progress spam
+    "-pp",   // stampa il progresso (lo parsiamo per la barra)
   ]);
 
   const full = JSON.parse(readFileSync(`${base}.json`, "utf8"));
@@ -180,6 +215,7 @@ function tokensToWords(full) {
 
   if (SPEAKERS) {
     console.log(`→ Diarizzazione (speaker: ${SPEAKERS})…`);
+    emitProgress("diarize");
     const segments = await diarize(wav);
     assignSpeakers(words, segments);
     const n = new Set(words.map((w) => w.speaker).filter(Boolean)).size;
@@ -194,6 +230,7 @@ function tokensToWords(full) {
     source: basename(INPUT),
   };
   writeFileSync(OUT, JSON.stringify(out, null, 2));
+  emitProgress("done", 100);
   console.log(`\n✓ ${words.length} parole con timecode → ${OUT}`);
   console.log("  Aprilo nell'editor con il pulsante \"Importa transcript.json\".");
 })().catch((err) => {

@@ -57,6 +57,30 @@ code {
 .ok { color: #2b8a3e; font-size: 0.9rem; }
 .err { color: #c92a2a; font-size: 0.9rem; }
 
+/* Barra di avanzamento trascrizione */
+.progress { margin: 0.5rem 0; }
+.progress-label { font-size: 0.85rem; color: #555; margin-bottom: 0.25rem; }
+.progress-track {
+  height: 8px;
+  background: #e9ecef;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  background: #4dabf7;
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+.progress-fill.indeterminate {
+  width: 35%;
+  animation: indet 1.1s ease-in-out infinite;
+}
+@keyframes indet {
+  0% { margin-left: -35%; }
+  100% { margin-left: 100%; }
+}
+
 /* Player video — resta fisso in alto mentre il testo scorre */
 .player {
   position: sticky;

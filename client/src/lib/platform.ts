@@ -10,8 +10,8 @@ export interface ElectronAPI {
   // il transcript. onProgress riceve le righe di avanzamento.
   transcribe: (
     videoPath: string,
-    opts: { lang?: string; speakers?: string }
-  ) => Promise<import("../types").TranscriptResult>;
+    opts: { lang?: string; speakers?: string; force?: boolean }
+  ) => Promise<import("../types").TranscriptResult & { cached?: boolean }>;
   // Salva/carica un progetto (.vte.json) su disco.
   saveProject: (data: unknown, suggestedName: string) => Promise<string | null>;
   loadProject: () => Promise<unknown | null>;

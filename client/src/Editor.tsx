@@ -79,7 +79,8 @@ export function Editor({ documentName }: { documentName: string }) {
   const [speakers, setSpeakers] = useState<string[]>([]);
   const [fps, setFps] = useState(25);
   const [numSpeakers, setNumSpeakers] = useState("2");
-  const [working, setWorking] = useState<string | null>(null);
+  const [working, setWorking] = useState(false);
+  const [progress, setProgress] = useState<{ phase: string; pct: number | null } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -171,25 +172,44 @@ export function Editor({ documentName }: { documentName: string }) {
   }, [videoUrl]);
 
   // Trascrizione integrata (solo Electron): lancia la pipeline locale.
-  async function transcribeNative() {
+  // force=true ricomincia da capo ignorando la cache (riusa però l'audio).
+  async function transcribeNative(force = false) {
     if (!videoPath) {
       setError("Apri prima un video.");
       return;
     }
     setError(null);
-    setWorking("Trascrizione in corso… (può richiedere qualche minuto)");
+    setWorking(true);
+    setProgress({ phase: "extract", pct: null });
+    // Avanzamento: righe `[[PROG]] <fase> <pct?>` emesse dalla pipeline.
+    const unsubscribe = electronAPI!.onTranscribeProgress((line) => {
+      const matches = [...line.matchAll(/\[\[PROG\]\] (\w+)(?: (\d+))?/g)];
+      const last = matches[matches.length - 1];
+      if (last) setProgress({ phase: last[1], pct: last[2] != null ? Number(last[2]) : null });
+    });
     try {
       const data = await electronAPI!.transcribe(videoPath, {
         lang: "it",
         speakers: numSpeakers.trim() || undefined,
+        force,
       });
       importWords(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setWorking(null);
+      unsubscribe();
+      setWorking(false);
+      setProgress(null);
     }
   }
+
+  const PHASE_LABEL: Record<string, string> = {
+    extract: "Estrazione audio…",
+    download: "Download modello (una volta sola)…",
+    transcribe: "Trascrizione",
+    diarize: "Riconoscimento speaker…",
+    done: "Completato",
+  };
 
   function onTimeUpdate() {
     if (videoRef.current) setPlayheadTime(editor, videoRef.current.currentTime);
@@ -270,8 +290,16 @@ export function Editor({ documentName }: { documentName: string }) {
                 size={6}
               />
             </label>
-            <button className="btn" onClick={transcribeNative} disabled={!!working}>
+            <button className="btn" onClick={() => transcribeNative(false)} disabled={working}>
               Trascrivi
+            </button>
+            <button
+              className="btn"
+              onClick={() => transcribeNative(true)}
+              disabled={working || !videoPath}
+              title="Ignora la trascrizione in cache e rifà da capo (riusa l'audio già estratto)"
+            >
+              ↻ da capo
             </button>
           </>
         )}
@@ -294,10 +322,24 @@ export function Editor({ documentName }: { documentName: string }) {
         </label>
         <button className="btn" onClick={exportEDL}>Esporta EDL (DaVinci)</button>
 
-        {working && <span className="ok">{working}</span>}
         {imported != null && !working && <span className="ok">✓ {imported} parole</span>}
         {error && <span className="err">⚠ {error}</span>}
       </div>
+
+      {working && progress && (
+        <div className="progress">
+          <div className="progress-label">
+            {PHASE_LABEL[progress.phase] ?? progress.phase}
+            {progress.phase === "transcribe" && progress.pct != null ? ` ${progress.pct}%` : ""}
+          </div>
+          <div className="progress-track">
+            <div
+              className={`progress-fill${progress.pct == null ? " indeterminate" : ""}`}
+              style={progress.pct != null ? { width: `${progress.pct}%` } : undefined}
+            />
+          </div>
+        </div>
+      )}
 
       {speakers.length > 0 && (
         <div className="legend">
