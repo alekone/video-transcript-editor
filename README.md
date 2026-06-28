@@ -67,12 +67,20 @@ video nativa, **nessun server** (solo locale, niente collaborazione). Il web res
 in parallelo. Lo stesso codice React serve entrambi (rileva `window.electronAPI`).
 
 ```bash
-npm run app:dev   # avvia Vite + Electron insieme
+npm run app:dev   # dev: avvia Vite + Electron insieme
 # (se electron non parte: node node_modules/electron/install.js)
+
+npm run dist:mac  # build: produce release/v-editor-<ver>-arm64.dmg (+ .app)
 ```
 
 Nell'app: **Apri video** → **Trascrivi** (whisper.cpp + diarizzazione, n. speaker
-nel campo) → edita → **Esporta EDL**. Packaging `.app`/`.dmg` = TODO fase 2.
+nel campo) → edita → **Esporta EDL**.
+
+Prerequisiti (la trascrizione usa gli strumenti di sistema, non bundlati):
+`brew install ffmpeg whisper-cpp` e `python3`. Il modello whisper si scarica al
+primo uso in `~/Library/Application Support/v-editor/`; il venv per la
+diarizzazione viene creato lì la prima volta che chiedi gli speaker.
+L'app non è firmata: al primo avvio, tasto destro → Apri.
 
 ## Deploy (web)
 
