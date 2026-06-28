@@ -104,7 +104,13 @@ function ensureDiarVenv(python, onLog) {
 
 ipcMain.handle("transcribe", async (e, videoPath, opts = {}) => {
   const eng = enginePaths();
-  const send = (d) => e.sender.send("transcribe-progress", d.toString());
+  // Invio protetto: se la finestra è stata chiusa/ricaricata mentre la
+  // pipeline gira, non far esplodere il main process.
+  const send = (d) => {
+    if (!e.sender.isDestroyed()) {
+      try { e.sender.send("transcribe-progress", d.toString()); } catch {}
+    }
+  };
   const wantSpeakers = !!(opts.speakers || "").trim();
   const force = !!opts.force;
 
@@ -146,12 +152,23 @@ ipcMain.handle("transcribe", async (e, videoPath, opts = {}) => {
         VTE_WAV_CACHE: wavCache, // riusa l'audio estratto tra un tentativo e l'altro
       },
     });
+    // Se la finestra si chiude mentre trascrive, killa il sottoprocesso
+    // (niente whisper/ffmpeg orfani) e termina senza errori.
+    const onGone = () => { try { p.kill(); } catch {} };
+    e.sender.once("destroyed", onGone);
     p.stdout.on("data", send);
     p.stderr.on("data", send);
     p.on("error", reject);
-    p.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`Trascrizione fallita (codice ${code})`))));
+    p.on("close", (code) => {
+      e.sender.off?.("destroyed", onGone);
+      if (e.sender.isDestroyed()) resolve(); // finestra chiusa: esci pulito
+      else if (code === 0) resolve();
+      else reject(new Error(`Trascrizione fallita (codice ${code})`));
+    });
   });
 
+  // Finestra chiusa a metà o output assente: esci senza errori.
+  if (e.sender.isDestroyed() || !fs.existsSync(out)) return null;
   const data = JSON.parse(fs.readFileSync(out, "utf8"));
   fs.unlinkSync(out);
   fs.writeFileSync(transcriptCache, JSON.stringify(data)); // salva per riapertura istantanea

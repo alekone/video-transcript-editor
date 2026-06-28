@@ -193,7 +193,7 @@ export function Editor({ documentName }: { documentName: string }) {
         speakers: numSpeakers.trim() || undefined,
         force,
       });
-      importWords(data);
+      if (data) importWords(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
