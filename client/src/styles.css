@@ -180,6 +180,20 @@ code { background: var(--panel-2); padding: 0.1em 0.35em; border-radius: 4px; fo
 .editor .w:hover { background: var(--hl); }
 .editor .playing { background: var(--playing); border-radius: 2px; }
 .editor mark.hl { background: var(--hl); border-radius: 2px; padding: 0 1px; }
+/* Taglio non distruttivo: barrato e attenuato */
+.editor span.cut { text-decoration: line-through; opacity: 0.4; text-decoration-color: #e03131; }
+
+/* Timeline del montaggio (verde = tenuto, grigio = tagliato) */
+.timeline {
+  position: relative; height: 16px; width: 100%;
+  background: var(--panel-2); border-radius: 6px; overflow: hidden;
+  margin: 0.25rem 0 0.75rem;
+}
+.tl-block { position: absolute; top: 0; height: 100%; cursor: pointer; }
+.tl-block.keep { background: #2f9e44; }
+.tl-block.cut { background: repeating-linear-gradient(45deg, #adb5bd, #adb5bd 3px, #ced4da 3px, #ced4da 6px); }
+.tl-block:hover { filter: brightness(1.15); }
+.tl-playhead { position: absolute; top: -2px; height: 20px; width: 2px; background: var(--fg); pointer-events: none; }
 
 /* Speaker */
 .spk-0 { color: #1971c2; } .spk-1 { color: #c2255c; } .spk-2 { color: #2f9e44; }

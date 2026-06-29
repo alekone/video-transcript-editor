@@ -11,6 +11,7 @@ import { isElectron, electronAPI } from "./lib/platform";
 import { Timing } from "./extensions/Timing";
 import { Playhead, setPlayheadTime } from "./extensions/Playhead";
 import { Highlight } from "./extensions/Highlight";
+import { Cut } from "./extensions/Cut";
 import { Timecodes } from "./extensions/Timecodes";
 import {
   buildEDL,
@@ -100,6 +101,8 @@ export function Editor({ documentName }: { documentName: string }) {
   const [preview, setPreview] = useState<{
     keep: number; cut: number; segs: number; cuts: { start: number; end: number; text: string }[];
   } | null>(null);
+  const [timeline, setTimeline] = useState<{ total: number; blocks: { start: number; end: number; kept: boolean }[] } | null>(null);
+  const [playTime, setPlayTime] = useState(0);
   const fileRef = useRef<HTMLInputElement>(null);
   const projRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -151,6 +154,7 @@ export function Editor({ documentName }: { documentName: string }) {
       StarterKit.configure({ history: false }),
       Timing,
       Highlight,
+      Cut,
       Timecodes,
       Playhead,
       Collaboration.configure({ document: ydoc }),
@@ -195,6 +199,29 @@ export function Editor({ documentName }: { documentName: string }) {
     }, 900);
     return () => clearTimeout(t);
   }, [editor, documentName, meta]);
+
+  // Timeline + anteprima-in-play LIVE: ricalcola tenuto/tagliato a ogni
+  // modifica del testo (barrature, cancellazioni, taglia-pause).
+  useEffect(() => {
+    if (!editor) return;
+    let timer: ReturnType<typeof setTimeout>;
+    const recompute = () => {
+      const s = segments();
+      if (!s.hasOriginal) { setTimeline(null); cutRangesRef.current = []; return; }
+      cutRangesRef.current = s.cut;
+      const allEnd = [...s.keep, ...s.cut].reduce((a, x) => Math.max(a, x.end), 0);
+      const total = Math.max(videoRef.current?.duration || 0, allEnd, 0.1);
+      const blocks = [
+        ...s.keep.map((x) => ({ start: x.start, end: x.end, kept: true })),
+        ...s.cut.map((x) => ({ start: x.start, end: x.end, kept: false })),
+      ].sort((a, b) => a.start - b.start);
+      setTimeline({ total, blocks });
+    };
+    const onUpdate = () => { clearTimeout(timer); timer = setTimeout(recompute, 400); };
+    editor.on("update", onUpdate);
+    recompute();
+    return () => { clearTimeout(timer); editor.off("update", onUpdate); };
+  }, [editor, maxGap]);
 
   // Scorciatoie: Alt+Space play/pausa
   useEffect(() => {
@@ -406,6 +433,7 @@ export function Editor({ documentName }: { documentName: string }) {
         return;
       }
     }
+    setPlayTime(v.currentTime);
     setPlayheadTime(editor, v.currentTime);
   }
   function onEditorClick(e: React.MouseEvent) {
@@ -420,16 +448,22 @@ export function Editor({ documentName }: { documentName: string }) {
   // --- Strumenti (feature) ---------------------------------------------
   function removeFillers() {
     if (!editor) return;
+    const cut = editor.schema.marks.cut;
     const tr = editor.state.tr;
-    const ranges: { from: number; to: number }[] = [];
+    let n = 0;
     editor.state.doc.descendants((node, pos) => {
-      if (node.isText && node.marks.some((m) => m.type.name === "timing") && isFiller(node.text || "")) {
-        ranges.push({ from: pos, to: pos + node.nodeSize });
+      if (node.isText && node.marks.some((m) => m.type.name === "timing") && isFiller(node.text || "") && !node.marks.some((m) => m.type.name === "cut")) {
+        tr.addMark(pos, pos + node.nodeSize, cut.create());
+        n++;
       }
     });
-    ranges.sort((a, b) => b.from - a.from).forEach((r) => tr.delete(r.from, r.to));
-    if (ranges.length) editor.view.dispatch(tr);
-    flash(`${ranges.length} filler rimossi (ehm, cioè, tipo…)`);
+    if (n) editor.view.dispatch(tr);
+    flash(`${n} filler barrati (ehm, cioè, tipo…). Ripristinabili.`);
+  }
+
+  // Taglio non distruttivo: barra/ripristina la selezione.
+  function toggleCut() {
+    editor?.chain().focus().toggleMark("cut").run();
   }
 
   function renameSpeaker(oldName: string, newName: string) {
@@ -557,9 +591,11 @@ export function Editor({ documentName }: { documentName: string }) {
       {/* Sidebar sinistra — strumenti sempre a portata mentre scrolli */}
       <aside className="sidebar">
         <div className="sidebar-group">
+          <button className="btn full" onClick={toggleCut}
+            title="Seleziona del testo e clicca per TAGLIARLO (barrato, escluso dal montaggio). Ri-seleziona e ri-clicca per ripristinarlo.">✂︎ Taglia / ripristina</button>
           <button className="btn full" onClick={() => editor.chain().focus().toggleMark("highlight").run()}
             title="Seleziona del testo e clicca per evidenziare. Per togliere: ri-seleziona la parte evidenziata e ri-clicca.">★ Evidenzia / togli</button>
-          <button className="btn full" onClick={removeFillers}>✂︎ Rimuovi filler</button>
+          <button className="btn full" onClick={removeFillers}>filler → barra</button>
           <button className="btn full" onClick={showStats}>📊 Statistiche</button>
         </div>
         <div className="sidebar-group">
@@ -738,7 +774,22 @@ export function Editor({ documentName }: { documentName: string }) {
       )}
 
       {videoUrl && (
-        <video ref={videoRef} src={videoUrl} controls className="player" onTimeUpdate={onTimeUpdate} />
+        <video ref={videoRef} src={videoUrl} controls className="player" onTimeUpdate={onTimeUpdate}
+          onLoadedMetadata={(e) => setTimeline((t) => t && { ...t, total: Math.max(t.total, (e.target as HTMLVideoElement).duration || 0) })} />
+      )}
+
+      {timeline && timeline.blocks.length > 0 && (
+        <div className="timeline" title="Verde = tenuto, grigio = tagliato. Clicca per saltare.">
+          {timeline.blocks.map((b, i) => (
+            <div
+              key={i}
+              className={`tl-block ${b.kept ? "keep" : "cut"}`}
+              style={{ left: `${(b.start / timeline.total) * 100}%`, width: `${((b.end - b.start) / timeline.total) * 100}%` }}
+              onClick={() => { if (videoRef.current) { videoRef.current.currentTime = b.start; videoRef.current.play(); } }}
+            />
+          ))}
+          <div className="tl-playhead" style={{ left: `${(playTime / timeline.total) * 100}%` }} />
+        </div>
       )}
 
       <div className="editor" onClick={onEditorClick}>

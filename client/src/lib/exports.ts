@@ -19,6 +19,8 @@ export function collectKeptWords(editor: Editor): TranscriptWord[] {
     if (!node.isText) return;
     const mark = node.marks.find((m) => m.type.name === "timing");
     if (!mark) return;
+    // i tagli non distruttivi (mark "cut") sono esclusi dal montaggio
+    if (node.marks.some((m) => m.type.name === "cut")) return;
     const { start, end, speaker } = mark.attrs as {
       start: number | null;
       end: number | null;
@@ -38,6 +40,7 @@ export function collectHighlightedWords(editor: Editor): TranscriptWord[] {
     const timing = node.marks.find((m) => m.type.name === "timing");
     const hl = node.marks.find((m) => m.type.name === "highlight");
     if (!timing || !hl) return;
+    if (node.marks.some((m) => m.type.name === "cut")) return;
     const { start, end, speaker } = timing.attrs as any;
     if (start == null || end == null) return;
     out.push({ text: (node.text ?? "").trim(), start, end, speaker: speaker ?? undefined });
