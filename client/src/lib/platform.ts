@@ -14,6 +14,10 @@ export interface ElectronAPI {
   ) => Promise<(import("../types").TranscriptResult & { cached?: boolean }) | null>;
   // trascrizione già in cache per questo video (o null)
   cachedTranscript: (videoPath: string) => Promise<import("../types").TranscriptResult | null>;
+  // project manager: file in ~/Documents/v-editor/
+  autosaveProject: (name: string, data: unknown) => Promise<string | null>;
+  listProjects: () => Promise<{ name: string; mtime: number }[]>;
+  readProject: (name: string) => Promise<any | null>;
   // Salva/carica un progetto (.vte.json) su disco.
   saveProject: (data: unknown, suggestedName: string) => Promise<string | null>;
   loadProject: () => Promise<unknown | null>;

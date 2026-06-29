@@ -216,6 +216,48 @@ ipcMain.handle("cached-transcript", async (_e, videoPath) => {
   }
 });
 
+// --- Project manager: file in ~/Documents/v-editor/ ---------------------
+function projectsDir() {
+  const dir = path.join(app.getPath("documents"), "v-editor");
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "progetto";
+
+// Autosave: scrive il progetto come file leggibile in Documenti/v-editor.
+ipcMain.handle("autosave-project", async (_e, name, data) => {
+  try {
+    const f = path.join(projectsDir(), `${slug(name)}.vte.json`);
+    fs.writeFileSync(f, JSON.stringify(data, null, 2));
+    return f;
+  } catch (err) {
+    logCrash("autosave", err);
+    return null;
+  }
+});
+
+// Elenco progetti (per "recenti"), ordinati per data di modifica.
+ipcMain.handle("list-projects", async () => {
+  try {
+    const dir = projectsDir();
+    return fs.readdirSync(dir)
+      .filter((f) => f.endsWith(".vte.json"))
+      .map((f) => ({ name: f.replace(/\.vte\.json$/, ""), mtime: fs.statSync(path.join(dir, f)).mtimeMs }))
+      .sort((a, b) => b.mtime - a.mtime);
+  } catch {
+    return [];
+  }
+});
+
+ipcMain.handle("read-project", async (_e, name) => {
+  try {
+    const f = path.join(projectsDir(), `${slug(name)}.vte.json`);
+    return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : null;
+  } catch {
+    return null;
+  }
+});
+
 ipcMain.handle("save-project", async (_e, data, suggestedName) => {
   const r = await dialog.showSaveDialog({ defaultPath: `${suggestedName}.vte.json` });
   if (r.canceled || !r.filePath) return null;

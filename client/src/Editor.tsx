@@ -89,6 +89,7 @@ export function Editor({ documentName }: { documentName: string }) {
   const [numSpeakers, setNumSpeakers] = useState("2");
   const [working, setWorking] = useState(false);
   const [progress, setProgress] = useState<{ phase: string; pct: number | null } | null>(null);
+  const [liveText, setLiveText] = useState(""); // transcript che si forma in diretta
   // Dark di default (le buone app creative partono in scuro); "light" solo se scelto.
   const [dark, setDark] = useState(() => localStorage.getItem("vte-theme") !== "light");
   const [skipCuts, setSkipCuts] = useState(false); // anteprima montaggio in play
@@ -104,6 +105,7 @@ export function Editor({ documentName }: { documentName: string }) {
   const projRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const cutRangesRef = useRef<{ start: number; end: number }[]>([]);
+  const latestProject = useRef<() => unknown>(() => ({}));
 
   const { ydoc, provider, meta } = useMemo(() => {
     const ydoc = new Y.Doc();
@@ -158,6 +160,42 @@ export function Editor({ documentName }: { documentName: string }) {
     ],
   });
 
+  // Autosave (Electron): scrive il progetto in ~/Documents/v-editor/ poco
+  // dopo ogni modifica. Niente "salva" manuale.
+  useEffect(() => {
+    if (!editor || !isElectron) return;
+    let timer: ReturnType<typeof setTimeout>;
+    const onUpdate = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => electronAPI!.autosaveProject(documentName, latestProject.current()), 1500);
+    };
+    editor.on("update", onUpdate);
+    return () => { clearTimeout(timer); editor.off("update", onUpdate); };
+  }, [editor, documentName]);
+
+  // Ripristino da file: se il documento è vuoto ma esiste un .vte.json salvato
+  // (es. dati solo su disco), caricalo. La persistenza viva è IndexedDB.
+  useEffect(() => {
+    if (!editor || !isElectron) return;
+    const t = setTimeout(async () => {
+      if (editor.getText().trim().length > 0) return; // già popolato da IndexedDB
+      const p = await electronAPI!.readProject(documentName);
+      if (p?.html && p.originalWords?.length) {
+        meta.set("originalWords", JSON.stringify(p.originalWords));
+        meta.set("speakers", JSON.stringify(p.speakers || []));
+        if (p.source) meta.set("source", p.source);
+        if (p.fps) { setFps(p.fps); meta.set("fps", String(p.fps)); }
+        if (p.maxGap) setMaxGap(p.maxGap);
+        if (p.numSpeakers) setNumSpeakers(String(p.numSpeakers));
+        editor.commands.setContent(p.html);
+        setSpeakers(p.speakers || []);
+        setImported(p.originalWords.length);
+        if (p.video) { setVideoPath(p.video); setVideoUrl(electronAPI!.mediaUrl(p.video)); restoredVideo.current = true; }
+      }
+    }, 900);
+    return () => clearTimeout(t);
+  }, [editor, documentName, meta]);
+
   // Scorciatoie: Alt+Space play/pausa
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -188,12 +226,11 @@ export function Editor({ documentName }: { documentName: string }) {
     if (data.fps) { setFps(data.fps); meta.set("fps", String(data.fps)); } // FPS rilevato + ricordato
   }
 
-  // Salva/apri un file di progetto (.vte.json) con tutti i setting + il testo
-  // editato (incluse evidenziazioni). Funziona sia su web sia su Electron.
-  function saveProject() {
-    if (!editor) return;
-    const project = {
+  // Oggetto progetto: tutti i setting + il testo editato (con evidenziazioni).
+  function projectObject() {
+    return {
       version: 1,
+      name: documentName,
       video: videoPath,
       fps,
       numSpeakers,
@@ -201,10 +238,17 @@ export function Editor({ documentName }: { documentName: string }) {
       originalWords: JSON.parse(meta.get("originalWords") || "[]"),
       speakers: JSON.parse(meta.get("speakers") || "[]"),
       source: meta.get("source") || null,
-      html: editor.getHTML(),
+      html: editor?.getHTML() ?? "",
     };
-    downloadText(`${documentName}.vte.json`, JSON.stringify(project));
-    flash("Progetto salvato.");
+  }
+  latestProject.current = projectObject; // sempre l'ultimo stato per l'autosave
+
+  // Salva un file di progetto .vte.json (download nel web, file in Documenti
+  // su Electron è già fatto dall'autosave). Qui è l'export manuale.
+  function saveProject() {
+    if (!editor) return;
+    downloadText(`${documentName}.vte.json`, JSON.stringify(projectObject()));
+    flash("Progetto esportato.");
   }
   async function loadProject(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -286,10 +330,18 @@ export function Editor({ documentName }: { documentName: string }) {
     setError(null);
     setWorking(true);
     setProgress({ phase: "extract", pct: null });
-    const unsubscribe = electronAPI!.onTranscribeProgress((line) => {
-      const matches = [...line.matchAll(/\[\[PROG\]\] (\w+)(?: (\d+))?/g)];
-      const last = matches[matches.length - 1];
-      if (last) setProgress({ phase: last[1], pct: last[2] != null ? Number(last[2]) : null });
+    setLiveText("");
+    const unsubscribe = electronAPI!.onTranscribeProgress((chunk) => {
+      for (const line of chunk.split("\n")) {
+        const prog = line.match(/\[\[PROG\]\] (\w+)(?: (\d+))?/);
+        if (prog) {
+          setProgress({ phase: prog[1], pct: prog[2] != null ? Number(prog[2]) : null });
+          continue;
+        }
+        // riga di segmento whisper: "[00:00:00.000 --> 00:00:04.640]   testo"
+        const seg = line.match(/-->\s*[\d:.]+\]\s+(.+)$/);
+        if (seg && seg[1]) setLiveText((prev) => prev + seg[1].trim() + " ");
+      }
     });
     try {
       const spk = numSpeakers.trim();
@@ -306,6 +358,7 @@ export function Editor({ documentName }: { documentName: string }) {
       unsubscribe();
       setWorking(false);
       setProgress(null);
+      setLiveText("");
     }
   }
 
@@ -475,7 +528,40 @@ export function Editor({ documentName }: { documentName: string }) {
   if (!editor) return <p>Caricamento editor…</p>;
 
   return (
-    <div>
+    <div className="layout">
+      {/* Sidebar sinistra — strumenti sempre a portata mentre scrolli */}
+      <aside className="sidebar">
+        <div className="sidebar-group">
+          <button className="btn full" onClick={() => editor.chain().focus().toggleMark("highlight").run()}
+            title="Seleziona del testo e clicca per evidenziare. Per togliere: ri-seleziona la parte evidenziata e ri-clicca.">★ Evidenzia / togli</button>
+          <button className="btn full" onClick={removeFillers}>✂︎ Rimuovi filler</button>
+          <button className="btn full" onClick={showStats}>📊 Statistiche</button>
+        </div>
+        <div className="sidebar-group">
+          <label className="field">velocità
+            <select onChange={(e) => setSpeed(Number(e.target.value))} defaultValue="1">
+              {[0.5, 0.75, 1, 1.25, 1.5, 2].map((v) => <option key={v} value={v}>{v}×</option>)}
+            </select>
+          </label>
+        </div>
+        <div className="sidebar-group">
+          <input className="find full" placeholder="Cerca…" value={find} onChange={(e) => setFind(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && doFind()} />
+          <div className="row">
+            <button className="btn ghost" onClick={doFind}>Trova</button>
+          </div>
+          <input className="find full" placeholder="Sostituisci con…" value={replace} onChange={(e) => setReplace(e.target.value)} />
+          <button className="btn ghost full" onClick={doReplaceAll}>Sostituisci tutto</button>
+        </div>
+        <div className="sidebar-group">
+          <label className="upload sm full">
+            <input ref={fileRef} type="file" accept="application/json,.json" onChange={onImport} />
+            Importa transcript.json
+          </label>
+        </div>
+      </aside>
+
+      <div className="content">
       {/* Barra principale — solo l'essenziale */}
       <div className="toolbar">
         {isElectron ? (
@@ -496,42 +582,13 @@ export function Editor({ documentName }: { documentName: string }) {
           </>
         )}
         <span className="spacer" />
-        <button className="btn ghost" onClick={saveProject} title="Salva tutto (testo, edit, setting) in un file .vte.json">Salva progetto</button>
+        <button className="btn ghost" onClick={saveProject} title="Esporta il progetto come file .vte.json">Esporta progetto</button>
         <label className="upload sm">
           <input ref={projRef} type="file" accept=".json,application/json" onChange={loadProject} />
           Apri progetto
         </label>
         <button className="btn ghost" onClick={() => setDark((d) => !d)} title="Tema chiaro/scuro">{dark ? "☀︎" : "☾"}</button>
       </div>
-
-      {/* Strumenti di editing — a scomparsa */}
-      <details className="section">
-        <summary>✏️ Strumenti di editing</summary>
-        <div className="toolbar tools">
-          <button className="btn" onClick={removeFillers}>✂︎ Rimuovi filler</button>
-          <button className="btn" onClick={() => editor.chain().focus().toggleMark("highlight").run()}
-            title="Seleziona del testo e clicca per evidenziare. Per togliere: ri-seleziona la parte evidenziata e ri-clicca.">★ Evidenzia / togli</button>
-          <button className="btn" onClick={showStats}>📊 Statistiche</button>
-          <label className="field">velocità
-            <select onChange={(e) => setSpeed(Number(e.target.value))} defaultValue="1">
-              {[0.5, 0.75, 1, 1.25, 1.5, 2].map((v) => <option key={v} value={v}>{v}×</option>)}
-            </select>
-          </label>
-        </div>
-        <div className="toolbar tools">
-          <input className="find" placeholder="Cerca…" value={find} onChange={(e) => setFind(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && doFind()} />
-          <button className="btn ghost" onClick={doFind}>Trova</button>
-          <input className="find" placeholder="Sostituisci con…" value={replace} onChange={(e) => setReplace(e.target.value)} />
-          <button className="btn ghost" onClick={doReplaceAll}>Sostituisci tutto</button>
-        </div>
-        <div className="toolbar tools">
-          <label className="upload sm">
-            <input ref={fileRef} type="file" accept="application/json,.json" onChange={onImport} />
-            Importa transcript.json
-          </label>
-        </div>
-      </details>
 
       {/* Tagli & montaggio — a scomparsa */}
       <details className="section">
@@ -586,6 +643,11 @@ export function Editor({ documentName }: { documentName: string }) {
             <div className={`progress-fill${progress.pct == null ? " indeterminate" : ""}`}
               style={progress.pct != null ? { width: `${progress.pct}%` } : undefined} />
           </div>
+          {liveText && (
+            <div className="live-preview" ref={(el) => { if (el) el.scrollTop = el.scrollHeight; }}>
+              {liveText}
+            </div>
+          )}
         </div>
       )}
 
@@ -661,6 +723,7 @@ export function Editor({ documentName }: { documentName: string }) {
 
       <div className="editor" onClick={onEditorClick}>
         <EditorContent editor={editor} />
+      </div>
       </div>
     </div>
   );

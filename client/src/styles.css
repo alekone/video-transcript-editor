@@ -23,7 +23,35 @@
   --playing: #8a6d00;
 }
 body { margin: 0; background: var(--bg); color: var(--fg); }
-main { max-width: 920px; margin: 0 auto; padding: 2rem 1.5rem; }
+main { max-width: 1140px; margin: 0 auto; padding: 1.5rem 1.5rem; }
+
+/* Layout con sidebar sinistra sticky */
+.layout { display: flex; gap: 1.25rem; align-items: flex-start; }
+.sidebar {
+  width: 210px; flex-shrink: 0;
+  position: sticky; top: 0.75rem;
+  max-height: calc(100vh - 1.5rem); overflow-y: auto;
+  display: flex; flex-direction: column; gap: 0.75rem;
+}
+.sidebar-group { display: flex; flex-direction: column; gap: 0.4rem; padding-bottom: 0.7rem; border-bottom: 1px solid var(--border); }
+.sidebar-group:last-child { border-bottom: none; }
+.sidebar .row { display: flex; gap: 0.4rem; }
+.content { flex: 1; min-width: 0; }
+.btn.full, .find.full, .upload.full { width: 100%; box-sizing: border-box; text-align: center; }
+.titlebar { display: flex; align-items: center; gap: 0.75rem; }
+.recent { background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 0.3rem; font-size: 0.85rem; }
+
+/* Transcript live mentre trascrive */
+.live-preview {
+  margin-top: 0.6rem; max-height: 160px; overflow-y: auto;
+  font-size: 0.9rem; color: var(--muted); line-height: 1.55;
+  background: var(--panel); border-radius: 8px; padding: 0.6rem 0.8rem;
+}
+
+@media (max-width: 760px) {
+  .layout { flex-direction: column; }
+  .sidebar { position: static; width: 100%; max-height: none; flex-direction: row; flex-wrap: wrap; }
+}
 h1 { font-size: 1.4rem; }
 .hint { color: var(--muted); font-size: 0.9rem; }
 code { background: var(--panel-2); padding: 0.1em 0.35em; border-radius: 4px; font-size: 0.85em; }
