@@ -1,10 +1,16 @@
-const { app, BrowserWindow, dialog, ipcMain, protocol, net } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, protocol } = require("electron");
 const { spawn } = require("node:child_process");
-const { pathToFileURL } = require("node:url");
 const path = require("node:path");
 const os = require("node:os");
 const fs = require("node:fs");
 const crypto = require("node:crypto");
+const { Readable } = require("node:stream");
+
+const MIME = {
+  ".mp4": "video/mp4", ".m4v": "video/mp4", ".mov": "video/quicktime",
+  ".mkv": "video/x-matroska", ".webm": "video/webm",
+  ".wav": "audio/wav", ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".aac": "audio/aac",
+};
 
 const isDev = !app.isPackaged;
 const ROOT = path.join(__dirname, "..");
@@ -72,11 +78,30 @@ function createWindow() {
 app.whenReady().then(() => {
   protocol.handle("media", async (request) => {
     try {
-      const u = new URL(request.url);
-      const filePath = decodeURIComponent(u.pathname);
-      return await net.fetch(pathToFileURL(filePath).toString(), {
-        headers: request.headers,
-        method: request.method,
+      const filePath = decodeURIComponent(new URL(request.url).pathname);
+      const size = fs.statSync(filePath).size;
+      const type = MIME[path.extname(filePath).toLowerCase()] || "application/octet-stream";
+      const range = request.headers.get("Range");
+      // Range request (seek): rispondi 206 col solo pezzo richiesto.
+      const m = range && range.match(/bytes=(\d+)-(\d*)/);
+      if (m) {
+        const start = parseInt(m[1], 10);
+        const end = m[2] ? Math.min(parseInt(m[2], 10), size - 1) : size - 1;
+        const stream = fs.createReadStream(filePath, { start, end });
+        return new Response(Readable.toWeb(stream), {
+          status: 206,
+          headers: {
+            "Content-Type": type,
+            "Content-Range": `bytes ${start}-${end}/${size}`,
+            "Accept-Ranges": "bytes",
+            "Content-Length": String(end - start + 1),
+          },
+        });
+      }
+      // Nessun range: file intero (in streaming).
+      return new Response(Readable.toWeb(fs.createReadStream(filePath)), {
+        status: 200,
+        headers: { "Content-Type": type, "Accept-Ranges": "bytes", "Content-Length": String(size) },
       });
     } catch (err) {
       logCrash("media-protocol", err);
