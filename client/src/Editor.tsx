@@ -89,7 +89,6 @@ export function Editor({ documentName }: { documentName: string }) {
   const [numSpeakers, setNumSpeakers] = useState("2");
   const [working, setWorking] = useState(false);
   const [progress, setProgress] = useState<{ phase: string; pct: number | null } | null>(null);
-  const [liveText, setLiveText] = useState(""); // transcript che si forma in diretta
   // Dark di default (le buone app creative partono in scuro); "light" solo se scelto.
   const [dark, setDark] = useState(() => localStorage.getItem("vte-theme") !== "light");
   const [skipCuts, setSkipCuts] = useState(false); // anteprima montaggio in play
@@ -106,6 +105,7 @@ export function Editor({ documentName }: { documentName: string }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const cutRangesRef = useRef<{ start: number; end: number }[]>([]);
   const latestProject = useRef<() => unknown>(() => ({}));
+  const streamedRef = useRef(false);
 
   const { ydoc, provider, meta } = useMemo(() => {
     const ydoc = new Y.Doc();
@@ -299,6 +299,24 @@ export function Editor({ documentName }: { documentName: string }) {
     }
   }
 
+  // Appende una frase (segmento) in fondo all'editor, con timecode di frase,
+  // senza spostare cursore/scroll dell'utente. Usato dallo streaming live.
+  function appendSegment(start: number, end: number, text: string) {
+    if (!editor) return;
+    const schema = editor.schema;
+    const mark = schema.marks.timing.create({ start, end, speaker: null, spk: null });
+    const para = schema.nodes.paragraph.create(null, schema.text(text + " ", [mark]));
+    const tr = editor.state.tr;
+    // al primo segmento svuota il paragrafo vuoto iniziale
+    if (!streamedRef.current) {
+      streamedRef.current = true;
+      tr.delete(0, tr.doc.content.size);
+    }
+    tr.insert(tr.doc.content.size, para);
+    tr.setMeta("addToHistory", false);
+    editor.view.dispatch(tr);
+  }
+
   async function openVideoNative() {
     const path = await electronAPI!.openVideo();
     if (!path) return;
@@ -326,11 +344,15 @@ export function Editor({ documentName }: { documentName: string }) {
   }, [videoUrl]);
 
   async function transcribeNative(force = false) {
+    if (!editor) return;
     if (!videoPath) return setError("Apri prima un video.");
     setError(null);
     setWorking(true);
     setProgress({ phase: "extract", pct: null });
-    setLiveText("");
+    // Il testo si forma DENTRO l'editor: partiamo da vuoto e appendiamo le
+    // frasi man mano che arrivano (timecode a livello di frase per il seek).
+    editor.commands.clearContent(true);
+    streamedRef.current = false;
     const unsubscribe = electronAPI!.onTranscribeProgress((chunk) => {
       for (const line of chunk.split("\n")) {
         const prog = line.match(/\[\[PROG\]\] (\w+)(?: (\d+))?/);
@@ -338,9 +360,13 @@ export function Editor({ documentName }: { documentName: string }) {
           setProgress({ phase: prog[1], pct: prog[2] != null ? Number(prog[2]) : null });
           continue;
         }
-        // riga di segmento whisper: "[00:00:00.000 --> 00:00:04.640]   testo"
-        const seg = line.match(/-->\s*[\d:.]+\]\s+(.+)$/);
-        if (seg && seg[1]) setLiveText((prev) => prev + seg[1].trim() + " ");
+        // segmento whisper: "[00:00:00.000 --> 00:00:04.640]   testo"
+        const m = line.match(/\[(\d{2}):(\d{2}):([\d.]+)\s*-->\s*(\d{2}):(\d{2}):([\d.]+)\]\s*(.+)$/);
+        if (m && m[7].trim()) {
+          const start = +m[1] * 3600 + +m[2] * 60 + parseFloat(m[3]);
+          const end = +m[4] * 3600 + +m[5] * 60 + parseFloat(m[6]);
+          appendSegment(start, end, m[7].trim());
+        }
       }
     });
     try {
@@ -358,7 +384,6 @@ export function Editor({ documentName }: { documentName: string }) {
       unsubscribe();
       setWorking(false);
       setProgress(null);
-      setLiveText("");
     }
   }
 
@@ -643,11 +668,6 @@ export function Editor({ documentName }: { documentName: string }) {
             <div className={`progress-fill${progress.pct == null ? " indeterminate" : ""}`}
               style={progress.pct != null ? { width: `${progress.pct}%` } : undefined} />
           </div>
-          {liveText && (
-            <div className="live-preview" ref={(el) => { if (el) el.scrollTop = el.scrollHeight; }}>
-              {liveText}
-            </div>
-          )}
         </div>
       )}
 
